@@ -18,7 +18,6 @@ param(
 
 # --- Configuration & Paths ---
 $ScriptDir = Split-Path -Path $OriginalScriptPath
-$DcuPath = Join-Path -Path $ScriptDir -ChildPath "dcu-cli.exe"
 
 function udf_EnsureTls12 {
     $currentProtocol = [Net.ServicePointManager]::SecurityProtocol
@@ -68,9 +67,48 @@ Write-Host "`nNo new Windows Updates were found. Proceeding to Dell updates..." 
 
 Write-Host "`n--- DELL UPDATES PHASE ---" -ForegroundColor Magenta
 
-if (-not (Test-Path $DcuPath)) {
-    Write-Host "dcu-cli.exe not found alongside the script! Skipping Dell updates phase." -ForegroundColor Yellow
+$DcuPath = $null
+$PossiblePaths = @(
+    "C:\Program Files\Dell\CommandUpdate\dcu-cli.exe",
+    "C:\Program Files (x86)\Dell\CommandUpdate\dcu-cli.exe",
+    "C:\Program Files\Dell\CommandUpdate\cli\dcu-cli.exe"
+)
+
+foreach ($path in $PossiblePaths) {
+    if (Test-Path $path) {
+        $DcuPath = $path
+        break
+    }
+}
+
+if (-not $DcuPath) {
+    Write-Host "Dell Command Update is not installed. Looking for an installer in the script directory..." -ForegroundColor Yellow
+    $Installer = Get-ChildItem -Path $ScriptDir -Filter "*Dell-Command-Update*.exe" | Select-Object -First 1
+    if (-not $Installer) {
+        $Installer = Get-ChildItem -Path $ScriptDir -Filter "DCU_Setup.exe" | Select-Object -First 1
+    }
+    
+    if ($Installer) {
+        Write-Host "Found installer: $($Installer.Name). Installing silently... Please wait." -ForegroundColor Cyan
+        Start-Process -FilePath $Installer.FullName -ArgumentList "/s" -Wait -NoNewWindow
+        Start-Sleep -Seconds 5
+        
+        foreach ($path in $PossiblePaths) {
+            if (Test-Path $path) {
+                $DcuPath = $path
+                break
+            }
+        }
+    }
+}
+
+if (-not $DcuPath) {
+    Write-Host "ERROR: dcu-cli.exe could not be found!" -ForegroundColor Red
+    Write-Host "Please download the 'Dell Command | Update Windows Universal Application' from the Dell Support website." -ForegroundColor Yellow
+    Write-Host "Place the downloaded .exe installer next to this script and rerun it. The script will install it for you." -ForegroundColor Yellow
+    Write-Host "Skipping Dell updates phase." -ForegroundColor Yellow
 } else {
+    Write-Host "Found Dell Command CLI at: $DcuPath" -ForegroundColor DarkCyan
     Write-Host "Applying Dell firmware and driver updates..." -ForegroundColor Cyan
     Write-Host "Executing dcu-cli.exe... Check the standard output below for detailed module statuses:`n" -ForegroundColor DarkCyan
     
