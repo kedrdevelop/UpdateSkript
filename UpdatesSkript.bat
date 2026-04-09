@@ -41,7 +41,7 @@ Import-Module PSWindowsUpdate
 Write-Host "Scanning and installing Windows updates. This may take a while..." -ForegroundColor Cyan
 
 # We use -OutVariable to capture the result while allowing it to stream to the console in real-time
-Install-WindowsUpdate -NotTitle "Antivirus" -AcceptAll -Install -Verbose -OutVariable Result
+Install-WindowsUpdate -NotTitle "Antivirus", "Defender", "Malicious" -AcceptAll -Install -Verbose -OutVariable Result
 
 $updatesInstalled = $false
 
