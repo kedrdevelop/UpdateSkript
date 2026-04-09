@@ -145,7 +145,8 @@ if (-not $DcuPath) {
     Write-Host "ERROR: dcu-cli.exe could not be found!" -ForegroundColor Red
     Write-Host "Please download the 'Dell Command | Update Windows Universal Application' from the Dell Support website." -ForegroundColor Yellow
     Write-Host "Place the downloaded .exe installer next to this script and rerun it. The script will install it for you." -ForegroundColor Yellow
-    Write-Host "Skipping Dell updates phase." -ForegroundColor Yellow
+    Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+    exit
 } else {
     Write-Host "Found Dell Command CLI at: $DcuPath" -ForegroundColor DarkCyan
     Write-Host "Applying Dell firmware and driver updates..." -ForegroundColor Cyan
@@ -170,6 +171,8 @@ if (-not $DcuPath) {
     }
     else {
         Write-Host "Dell Update failed or reported an issue. (Code: $exitCode)" -ForegroundColor Yellow
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
     }
 }
 
