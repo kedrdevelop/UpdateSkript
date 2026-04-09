@@ -111,8 +111,8 @@ if (-not $DcuPath) {
             Invoke-WebRequest -Uri $DotNetUrl -OutFile $DotNetInstaller -UseBasicParsing
         }
         if (Test-Path $DotNetInstaller) {
-            Write-Host "Launching .NET 8 Desktop Runtime installer..." -ForegroundColor Cyan
-            Start-Process -FilePath $DotNetInstaller -Wait -NoNewWindow
+            Write-Host "Installing .NET 8 Desktop Runtime silently..." -ForegroundColor Cyan
+            Start-Process -FilePath $DotNetInstaller -ArgumentList "/quiet /norestart" -Wait -NoNewWindow
         }
 
         Write-Host "Found installer: $($Installer.Name). Launching Dell Command Update installer..." -ForegroundColor Cyan
