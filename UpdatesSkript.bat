@@ -83,7 +83,7 @@ foreach ($path in $PossiblePaths) {
 
 if (-not $DcuPath) {
     Write-Host "Dell Command Update is not installed. Looking for an installer in the script directory..." -ForegroundColor Yellow
-    $Installer = Get-ChildItem -Path $ScriptDir -Filter "*Dell-Command-Update*.exe" | Select-Object -First 1
+    $Installer = Get-ChildItem -Path $ScriptDir -Filter "Dell-Command-Update-Windows-Universal-Application*.exe" | Select-Object -First 1
     if (-not $Installer) {
         $Installer = Get-ChildItem -Path $ScriptDir -Filter "DCU_Setup.exe" | Select-Object -First 1
     }
