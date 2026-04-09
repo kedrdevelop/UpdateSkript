@@ -45,7 +45,7 @@ if (Test-Path $WuFlagPath) {
 
     # Get available updates, filter them, and install safely to avoid pipeline binding issues
     $pendingUpdates = Get-WindowsUpdate
-    $filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious|Security platform' }
+    $filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Security Intelligence Update|Malicious Software Removal Tool|Antimalware Platform|Security platform' }
 
     $Result = @()
     if ($filteredUpdates) {
