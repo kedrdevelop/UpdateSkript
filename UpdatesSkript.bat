@@ -18,6 +18,7 @@ param(
 
 # --- Configuration & Paths ---
 $ScriptDir = Split-Path -Path $OriginalScriptPath
+$WuFlagPath = "$env:PUBLIC\UpdateSkript_WU.flag"
 
 function udf_EnsureTls12 {
     $currentProtocol = [Net.ServicePointManager]::SecurityProtocol
@@ -30,50 +31,57 @@ function udf_EnsureTls12 {
 Write-Host "`n--- WINDOWS UPDATES PHASE ---" -ForegroundColor Magenta
 udf_EnsureTls12
 
-Write-Host "Preparing NuGet provider..." -ForegroundColor Cyan
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
+if (Test-Path $WuFlagPath) {
+    Write-Host "Windows Updates were already completed previously. Skipping this phase." -ForegroundColor Green
+} else {
+    Write-Host "Preparing NuGet provider..." -ForegroundColor Cyan
+    Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
 
-Write-Host "Loading PSWindowsUpdate module..." -ForegroundColor Cyan
-Install-Module -Name PSWindowsUpdate -Force -AllowClobber -SkipPublisherCheck -ErrorAction SilentlyContinue
-Import-Module PSWindowsUpdate
+    Write-Host "Loading PSWindowsUpdate module..." -ForegroundColor Cyan
+    Install-Module -Name PSWindowsUpdate -Force -AllowClobber -SkipPublisherCheck -ErrorAction SilentlyContinue
+    Import-Module PSWindowsUpdate
 
-Write-Host "Scanning and installing Windows updates. This may take a while..." -ForegroundColor Cyan
+    Write-Host "Scanning and installing Windows updates. This may take a while..." -ForegroundColor Cyan
 
-# Get available updates, filter them, and install safely to avoid pipeline binding issues
-$pendingUpdates = Get-WindowsUpdate
-$filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious|Security platform' }
+    # Get available updates, filter them, and install safely to avoid pipeline binding issues
+    $pendingUpdates = Get-WindowsUpdate
+    $filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious|Security platform' }
 
-$Result = @()
-if ($filteredUpdates) {
-    foreach ($update in $filteredUpdates) {
-        if ($update.KB) {
-            Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
-            if ($tempRes) { $Result += $tempRes }
-        } else {
-            Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -Verbose -OutVariable tempRes
-            if ($tempRes) { $Result += $tempRes }
+    $Result = @()
+    if ($filteredUpdates) {
+        foreach ($update in $filteredUpdates) {
+            if ($update.KB) {
+                Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
+                if ($tempRes) { $Result += $tempRes }
+            } else {
+                Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -Verbose -OutVariable tempRes
+                if ($tempRes) { $Result += $tempRes }
+            }
         }
     }
-}
 
-$updatesInstalled = $false
+    $updatesInstalled = $false
 
-if ($null -ne $Result) {
-    $resultArray = @($Result)
-    $installedCount = ($resultArray | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
-    if ($installedCount -gt 0) { $updatesInstalled = $true }
-}
+    if ($null -ne $Result) {
+        $resultArray = @($Result)
+        $installedCount = ($resultArray | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
+        if ($installedCount -gt 0) { $updatesInstalled = $true }
+    }
 
-# We unconditionally restart the computer if Windows Updates were installed, to allow multiple passes.
-# If an update was installed, there could be subsequent dependent updates available only after reboot.
-if ($updatesInstalled) {
-    Write-Host "`nWindows Updates were installed successfully!" -ForegroundColor Green
-    Write-Host "To ensure all dependent updates are caught, the system will now reboot." -ForegroundColor Yellow
-    Write-Host "Please MANUALLY rerun this script after rebooting to continue the process." -ForegroundColor Red
-    
-    Start-Sleep -Seconds 10
-    Restart-Computer -Force
-    exit
+    # We unconditionally restart the computer if Windows Updates were installed, to allow multiple passes.
+    if ($updatesInstalled) {
+        Write-Host "`nWindows Updates were installed successfully!" -ForegroundColor Green
+        Write-Host "To ensure all dependent updates are caught, the system will now reboot." -ForegroundColor Yellow
+        Write-Host "Please MANUALLY rerun this script after rebooting to continue the process." -ForegroundColor Red
+        
+        Start-Sleep -Seconds 10
+        Restart-Computer -Force
+        exit
+    }
+
+    # If no updates were installed, we mark the phase as completed to skip it on next run
+    Write-Host "`nNo new Windows Updates were found. Marking phase as completed." -ForegroundColor Green
+    New-Item -Path $WuFlagPath -ItemType File -Force | Out-Null
 }
 
 # If no updates were installed, we proceed to Dell updates
@@ -167,3 +175,4 @@ if (-not $DcuPath) {
 
 Write-Host "`n--- UPDATE PROCESS FULLY COMPLETED ---" -ForegroundColor Green
 Write-Host "No further Windows or Dell updates are available." -ForegroundColor Cyan
+if (Test-Path $WuFlagPath) { Remove-Item -Path $WuFlagPath -Force | Out-Null }
