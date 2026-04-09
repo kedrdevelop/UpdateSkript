@@ -103,8 +103,8 @@ if (-not $DcuPath) {
     }
     
     if ($Installer) {
-        Write-Host "Found installer: $($Installer.Name). Installing silently... This may take a few minutes." -ForegroundColor Cyan
-        Start-Process -FilePath $Installer.FullName -ArgumentList "/s" -Wait -NoNewWindow
+        Write-Host "Found installer: $($Installer.Name). Launching installer..." -ForegroundColor Cyan
+        Start-Process -FilePath $Installer.FullName -Wait -NoNewWindow
         
         Write-Host "Waiting up to 2 minutes for installation to finish..." -ForegroundColor DarkCyan
         $retryCount = 0
