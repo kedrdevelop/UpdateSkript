@@ -41,7 +41,7 @@ Write-Host "Scanning and installing Windows updates. This may take a while..." -
 
 # Get available updates, filter them, and install safely to avoid pipeline binding issues
 $pendingUpdates = Get-WindowsUpdate
-$filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious|Security Intelligence' }
+$filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious|Security platform' }
 
 $Result = @()
 if ($filteredUpdates) {
