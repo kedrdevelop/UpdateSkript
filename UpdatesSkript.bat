@@ -103,7 +103,19 @@ if (-not $DcuPath) {
     }
     
     if ($Installer) {
-        Write-Host "Found installer: $($Installer.Name). Launching installer..." -ForegroundColor Cyan
+        Write-Host "Checking for required .NET 8 Desktop Runtime..." -ForegroundColor Yellow
+        $DotNetUrl = "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
+        $DotNetInstaller = Join-Path $ScriptDir "windowsdesktop-runtime-win-x64.exe"
+        if (-not (Test-Path $DotNetInstaller)) {
+            Write-Host "Downloading .NET 8 Desktop Runtime from Microsoft..." -ForegroundColor Cyan
+            Invoke-WebRequest -Uri $DotNetUrl -OutFile $DotNetInstaller -UseBasicParsing
+        }
+        if (Test-Path $DotNetInstaller) {
+            Write-Host "Launching .NET 8 Desktop Runtime installer..." -ForegroundColor Cyan
+            Start-Process -FilePath $DotNetInstaller -Wait -NoNewWindow
+        }
+
+        Write-Host "Found installer: $($Installer.Name). Launching Dell Command Update installer..." -ForegroundColor Cyan
         Start-Process -FilePath $Installer.FullName -Wait -NoNewWindow
         
         Write-Host "Waiting up to 2 minutes for installation to finish..." -ForegroundColor DarkCyan
