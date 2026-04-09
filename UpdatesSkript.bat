@@ -39,8 +39,22 @@ Import-Module PSWindowsUpdate
 
 Write-Host "Scanning and installing Windows updates. This may take a while..." -ForegroundColor Cyan
 
-# Get available updates, filter out any with Antivirus, Defender, or Malicious in title, then install
-Get-WindowsUpdate | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious' } | Install-WindowsUpdate -AcceptAll -Verbose -OutVariable Result
+# Get available updates, filter them, and install safely to avoid pipeline binding issues
+$pendingUpdates = Get-WindowsUpdate
+$filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Antivirus|Defender|Malicious' }
+
+$Result = @()
+if ($filteredUpdates) {
+    foreach ($update in $filteredUpdates) {
+        if ($update.KB) {
+            Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
+            if ($tempRes) { $Result += $tempRes }
+        } else {
+            Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -Verbose -OutVariable tempRes
+            if ($tempRes) { $Result += $tempRes }
+        }
+    }
+}
 
 $updatesInstalled = $false
 
@@ -89,19 +103,24 @@ if (-not $DcuPath) {
     }
     
     if ($Installer) {
-        Write-Host "Found installer: $($Installer.Name). Installing silently... Please wait." -ForegroundColor Cyan
+        Write-Host "Found installer: $($Installer.Name). Installing silently... This may take a few minutes." -ForegroundColor Cyan
         Start-Process -FilePath $Installer.FullName -ArgumentList "/s" -Wait -NoNewWindow
-        Start-Sleep -Seconds 5
         
-        foreach ($path in $PossiblePaths) {
-            if (Test-Path $path) {
-                $DcuPath = $path
-                break
+        Write-Host "Waiting up to 2 minutes for installation to finish..." -ForegroundColor DarkCyan
+        $retryCount = 0
+        while ($retryCount -lt 12) {
+            Start-Sleep -Seconds 10
+            foreach ($path in $PossiblePaths) {
+                if (Test-Path $path) {
+                    $DcuPath = $path
+                    break
+                }
             }
+            if ($DcuPath) { break }
+            $retryCount++
         }
     }
 }
-
 if (-not $DcuPath) {
     Write-Host "ERROR: dcu-cli.exe could not be found!" -ForegroundColor Red
     Write-Host "Please download the 'Dell Command | Update Windows Universal Application' from the Dell Support website." -ForegroundColor Yellow
