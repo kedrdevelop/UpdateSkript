@@ -26,6 +26,9 @@ namespace UpdateSkriptApp.ViewModels
         [ObservableProperty]
         private string _currentAction = "Waiting for user...";
 
+        [ObservableProperty]
+        private string _statusColor = "#007ACC"; // Default Blue
+
         public MainViewModel()
         {
             _logger = new Services.FileLoggerService();
@@ -84,10 +87,14 @@ namespace UpdateSkriptApp.ViewModels
         {
             try
             {
+                StatusColor = "#007ACC"; // Blue
                 await _engine.RunDeploymentAsync();
+                StatusColor = "#28A745"; // Success Green
+                CurrentAction = "Deployment Completed Successfully.";
             }
             catch (Exception ex)
             {
+                StatusColor = "#DC3545"; // Error Red
                 _logger.Log($"Critical error during deployment: {ex.Message}", "Red");
             }
         }

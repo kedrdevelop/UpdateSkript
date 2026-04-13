@@ -5,8 +5,15 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="UpdateSkript Deployment Tool" Height="600" Width="900"
-        Background="#1E1E1E" Foreground="White"
+        Foreground="White"
         WindowStartupLocation="CenterScreen">
+    
+    <Window.Background>
+        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+            <GradientStop Color="#1E1E1E" Offset="0"/>
+            <GradientStop Color="#121212" Offset="1"/>
+        </LinearGradientBrush>
+    </Window.Background>
     
     <Grid Margin="20">
         <Grid.RowDefinitions>
@@ -19,7 +26,7 @@
 
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,20">
-            <TextBlock Text="WINDOWS & DRIVER DEPLOYMENT" FontSize="24" FontWeight="Bold" Foreground="#007ACC"/>
+            <TextBlock Text="WINDOWS & DRIVER DEPLOYMENT" FontSize="24" FontWeight="Bold" Foreground="{Binding StatusColor}"/>
             <Separator Background="#333" Margin="0,5,0,0"/>
         </StackPanel>
 
@@ -59,10 +66,10 @@
         <StackPanel Grid.Row="3" Margin="0,20,0,10">
             <Grid>
                 <TextBlock Text="{Binding CurrentAction, FallbackValue='Ready to start'}" HorizontalAlignment="Left" Foreground="Gray"/>
-                <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0}%}" HorizontalAlignment="Right" Foreground="#007ACC"/>
+                <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0}%}" HorizontalAlignment="Right" Foreground="{Binding StatusColor}"/>
             </Grid>
             <ProgressBar Value="{Binding ProgressPercentage}" Height="10" Margin="0,5,0,0" 
-                         Background="#333" Foreground="#007ACC" BorderThickness="0"/>
+                         Background="#333" Foreground="{Binding StatusColor}" BorderThickness="0"/>
         </StackPanel>
 
         <!-- Buttons -->
