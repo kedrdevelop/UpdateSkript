@@ -553,6 +553,33 @@ if (Test-Path $Win11FlagPath) {
                 Log "Command: $SetupPath /auto upgrade /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning" -Color DarkGray
                 # Note: /quiet removed to allow more transparency in monitoring
 
+                # ---------------------------------------------------------
+                # INJECT SETUPCOMPLETE.CMD FOR POST-UPGRADE SYSPREP CLEANUP
+                # ---------------------------------------------------------
+                Log "Configuring post-upgrade automated Sysprep (SetupComplete.cmd)..." -Color Cyan
+                $SetupScriptsDir = "C:\Windows\Setup\Scripts"
+                if (-not (Test-Path $SetupScriptsDir)) {
+                    New-Item -ItemType Directory -Path $SetupScriptsDir -Force | Out-Null
+                }
+                $SetupCompletePath = Join-Path $SetupScriptsDir "SetupComplete.cmd"
+                $SetupCompleteContent = @"
+@echo off
+:: 1. Remove Microsoft Upgrade Block
+reg delete "HKLM\SYSTEM\Setup\Upgrade" /f >nul 2>&1
+
+:: 2. Cleanup defaultuser0 created by upgrade
+net user defaultuser0 /delete >nul 2>&1
+rd /s /q "C:\Users\defaultuser0" >nul 2>&1
+
+:: 3. Clean deployment flags
+del /f /q "$env:PUBLIC\UpdateSkript_*.flag" >nul 2>&1
+
+:: 4. Trigger Sysprep and Shutdown
+%WINDIR%\system32\sysprep\sysprep.exe /oobe /generalize /shutdown /quiet
+"@
+                Set-Content -Path $SetupCompletePath -Value $SetupCompleteContent -Encoding Ascii
+                Log "  -> SetupComplete.cmd created. The PC will automatically Sysprep & shutdown after upgrade." -Color Green
+
                 # Run the upgrade with live progress monitoring
                 $setupArgs = "/auto upgrade /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning"
                 $setupProcess = Start-Process -FilePath $SetupPath -ArgumentList $setupArgs -PassThru -NoNewWindow
@@ -696,48 +723,6 @@ if (Test-Path $Win11FlagPath) {
     }
 }
 }
-# =============================================================================
-# PHASE 4: OOBE RESEAL (SYSPREP)
-# =============================================================================
-if ((Test-Path $WuFlagPath) -and (Test-Path $DellFlagPath) -and (Test-Path $Win11FlagPath)) {
-    Log "" -Color White
-    Log "--- PHASE 4: OOBE RESEAL (SYSPREP) ---" -Color Magenta
-    Log "All previous phases are completed. The system is ready for the Golden Master reseal." -Color Green
-    
-    $SysprepChoice = Read-Host "Do you want to finalize this PC for deployment (Sysprep -> OOBE)? (y/N)"
-    if ($SysprepChoice -match '^[yY]') {
-        Log "Preparing system for Out-Of-Box Experience (OOBE)..." -Color Cyan
-
-        # 1. Remove Microsoft Upgrade Block
-        $UpgradeKey = "HKLM:\SYSTEM\Setup\Upgrade"
-        if (Test-Path $UpgradeKey) {
-            Log "Removing Upgrade registry key to bypass Microsoft Sysprep block..." -Color Yellow
-            Remove-Item -Path $UpgradeKey -Recurse -Force -ErrorAction SilentlyContinue
-        }
-
-        # 2. Cleanup defaultuser0
-        Log "Cleaning up temporary defaultuser0 profile..." -Color Yellow
-        net user defaultuser0 /delete 2>&1 | Out-Null
-        $DefaultUserDir = "C:\Users\defaultuser0"
-        if (Test-Path $DefaultUserDir) {
-            Remove-Item -Path $DefaultUserDir -Recurse -Force -ErrorAction SilentlyContinue
-        }
-
-        # 3. Clean our flags
-        Log "Removing temporary deployment flags..." -Color DarkGray
-        Remove-Item -Path $WuFlagPath, $DellFlagPath, $Win11FlagPath -Force -ErrorAction SilentlyContinue
-
-        # 4. Trigger Sysprep
-        Log "Running Sysprep (Generalize + OOBE)... The PC will SHUT DOWN when finished." -Color Red
-        Log "DO NOT INTERRUPT. The next boot will be the clean OOBE Autopilot screen." -Color Cyan
-        Start-Sleep -Seconds 5
-        Start-Process -FilePath "$env:WINDIR\system32\sysprep\sysprep.exe" -ArgumentList "/oobe /generalize /shutdown /quiet" -Wait -NoNewWindow
-        exit
-    } else {
-        Log "Skipping Phase 4. System remains in Audit Mode." -Color Yellow
-    }
-}
-
 # =============================================================================
 # DONE
 # =============================================================================
