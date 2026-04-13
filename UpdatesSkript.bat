@@ -87,93 +87,154 @@ if (Test-Path $WuFlagPath) {
 # If no updates were installed, we proceed to Dell updates
 Write-Host "`nNo new Windows Updates were found. Proceeding to Dell updates..." -ForegroundColor Green
 
-Write-Host "`n--- DELL UPDATES PHASE ---" -ForegroundColor Magenta
+Write-Host "`n--- DELL DRIVER PACK PHASE ---" -ForegroundColor Magenta
 
-$DcuPath = $null
-$PossiblePaths = @(
-    "C:\Program Files\Dell\CommandUpdate\dcu-cli.exe",
-    "C:\Program Files (x86)\Dell\CommandUpdate\dcu-cli.exe",
-    "C:\Program Files\Dell\CommandUpdate\cli\dcu-cli.exe"
-)
+# --- Step 1: Identify the system ---
+$SystemInfo = Get-CimInstance Win32_ComputerSystem
+$SystemModel = $SystemInfo.Model.Trim()
+$SystemManufacturer = $SystemInfo.Manufacturer.Trim()
 
-foreach ($path in $PossiblePaths) {
-    if (Test-Path $path) {
-        $DcuPath = $path
-        break
-    }
-}
-
-if (-not $DcuPath) {
-    Write-Host "Dell Command Update is not installed. Looking for an installer in the script directory..." -ForegroundColor Yellow
-    $Installer = Get-ChildItem -Path $ScriptDir -Filter "Dell-Command-Update-Windows-Universal-Application*.exe" | Select-Object -First 1
-    if (-not $Installer) {
-        $Installer = Get-ChildItem -Path $ScriptDir -Filter "DCU_Setup.exe" | Select-Object -First 1
-    }
-    
-    if ($Installer) {
-        Write-Host "Checking for required .NET 8 Desktop Runtime..." -ForegroundColor Yellow
-        $DotNetUrl = "https://aka.ms/dotnet/8.0/windowsdesktop-runtime-win-x64.exe"
-        $DotNetInstaller = Join-Path $ScriptDir "windowsdesktop-runtime-win-x64.exe"
-        if (-not (Test-Path $DotNetInstaller)) {
-            Write-Host "Downloading .NET 8 Desktop Runtime from Microsoft..." -ForegroundColor Cyan
-            Invoke-WebRequest -Uri $DotNetUrl -OutFile $DotNetInstaller -UseBasicParsing
-        }
-        if (Test-Path $DotNetInstaller) {
-            Write-Host "Installing .NET 8 Desktop Runtime silently..." -ForegroundColor Cyan
-            Start-Process -FilePath $DotNetInstaller -ArgumentList "/quiet /norestart" -Wait -NoNewWindow
-        }
-
-        Write-Host "Found installer: $($Installer.Name). Launching Dell Command Update installer..." -ForegroundColor Cyan
-        Start-Process -FilePath $Installer.FullName -Wait -NoNewWindow
-        
-        Write-Host "Waiting up to 2 minutes for installation to finish..." -ForegroundColor DarkCyan
-        $retryCount = 0
-        while ($retryCount -lt 12) {
-            Start-Sleep -Seconds 10
-            foreach ($path in $PossiblePaths) {
-                if (Test-Path $path) {
-                    $DcuPath = $path
-                    break
-                }
-            }
-            if ($DcuPath) { break }
-            $retryCount++
-        }
-    }
-}
-if (-not $DcuPath) {
-    Write-Host "ERROR: dcu-cli.exe could not be found!" -ForegroundColor Red
-    Write-Host "Please download the 'Dell Command | Update Windows Universal Application' from the Dell Support website." -ForegroundColor Yellow
-    Write-Host "Place the downloaded .exe installer next to this script and rerun it. The script will install it for you." -ForegroundColor Yellow
-    Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
-    exit
+if ($SystemManufacturer -notmatch 'Dell') {
+    Write-Host "This system is not manufactured by Dell ($SystemManufacturer). Skipping Dell driver phase." -ForegroundColor Yellow
 } else {
-    Write-Host "Found Dell Command CLI at: $DcuPath" -ForegroundColor DarkCyan
-    Write-Host "Applying Dell firmware and driver updates..." -ForegroundColor Cyan
-    Write-Host "Executing dcu-cli.exe... Check the standard output below for detailed module statuses:`n" -ForegroundColor DarkCyan
-    
-    $dcuProcess = Start-Process -FilePath $DcuPath -ArgumentList "/applyUpdates -reboot=disable" -Wait -NoNewWindow -PassThru
-    $exitCode = $dcuProcess.ExitCode
-    
-    Write-Host "Dell Update finished with exit code: $exitCode" -ForegroundColor Cyan
-    
-    # 0 = Success, 4 = Password Required (usually for BIOS, implies completion otherwise)
-    if ($exitCode -eq 0 -or $exitCode -eq 4) {
-        Write-Host "Dell Updates complete (no reboot required)." -ForegroundColor Green
-    }
-    elseif ($exitCode -eq 2 -or $exitCode -eq 3) {
-        Write-Host "Dell Updates installed. A reboot is required to proceed." -ForegroundColor Green
-        Write-Host "Please MANUALLY rerun this script after rebooting to ensure no further updates remain." -ForegroundColor Red
-        
-        Start-Sleep -Seconds 10
-        Restart-Computer -Force
-        exit
-    }
-    else {
-        Write-Host "Dell Update failed or reported an issue. (Code: $exitCode)" -ForegroundColor Yellow
+    Write-Host "Detected Dell system model: $SystemModel" -ForegroundColor Cyan
+
+    # --- Step 2: Download and extract Dell Driver Pack Catalog ---
+    $CatalogUrl = "https://downloads.dell.com/catalog/DriverPackCatalog.cab"
+    $TempDir = Join-Path $env:TEMP "DellDriverPack"
+    $CabPath = Join-Path $TempDir "DriverPackCatalog.cab"
+    $XmlPath = Join-Path $TempDir "DriverPackCatalog.xml"
+
+    if (-not (Test-Path $TempDir)) { New-Item -Path $TempDir -ItemType Directory -Force | Out-Null }
+
+    Write-Host "Downloading Dell Driver Pack Catalog..." -ForegroundColor Cyan
+    try {
+        Invoke-WebRequest -Uri $CatalogUrl -OutFile $CabPath -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Failed to download Dell catalog. Check your internet connection." -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
         Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
         exit
     }
+
+    Write-Host "Extracting catalog XML..." -ForegroundColor Cyan
+    expand.exe $CabPath -F:DriverPackCatalog.xml $TempDir | Out-Null
+
+    if (-not (Test-Path $XmlPath)) {
+        Write-Host "ERROR: Failed to extract DriverPackCatalog.xml" -ForegroundColor Red
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
+    }
+
+    # --- Step 3: Find matching driver pack ---
+    Write-Host "Parsing catalog for model: $SystemModel ..." -ForegroundColor Cyan
+    [xml]$Catalog = Get-Content $XmlPath
+
+    # Get the current OS version info for matching
+    $OSVersion = (Get-CimInstance Win32_OperatingSystem).Version
+    $OSBuild = [System.Environment]::OSVersion.Version.Build
+
+    # Determine OS string to match (e.g. "Windows 11" or "Windows 10")
+    if ($OSBuild -ge 22000) { $OSTarget = "Windows 11" } else { $OSTarget = "Windows 10" }
+    Write-Host "Target OS: $OSTarget (Build $OSBuild)" -ForegroundColor DarkCyan
+
+    $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
+        $modelMatch = $false
+        foreach ($brand in $_.SupportedSystems.Brand) {
+            foreach ($model in $brand.Model) {
+                if ($model.name -eq $SystemModel) {
+                    $modelMatch = $true
+                    break
+                }
+            }
+            if ($modelMatch) { break }
+        }
+        $osMatch = $false
+        foreach ($os in $_.SupportedOperatingSystems.OperatingSystem) {
+            if ($os.Display -match $OSTarget -and $os.osArch -eq 'x64') {
+                $osMatch = $true
+                break
+            }
+        }
+        $modelMatch -and $osMatch -and $_.type -ne 'WinPE'
+    }
+
+    if (-not $MatchingPacks) {
+        Write-Host "WARNING: No driver pack found for model '$SystemModel' and $OSTarget x64." -ForegroundColor Yellow
+        Write-Host "Trying a broader search by model name..." -ForegroundColor Yellow
+
+        $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
+            $modelMatch = $false
+            foreach ($brand in $_.SupportedSystems.Brand) {
+                foreach ($model in $brand.Model) {
+                    if ($model.name -match [regex]::Escape($SystemModel)) {
+                        $modelMatch = $true
+                        break
+                    }
+                }
+                if ($modelMatch) { break }
+            }
+            $modelMatch -and $_.type -ne 'WinPE'
+        }
+    }
+
+    if (-not $MatchingPacks) {
+        Write-Host "ERROR: No driver pack found for this Dell model ($SystemModel)." -ForegroundColor Red
+        Write-Host "This model may not have an enterprise driver pack available in the Dell catalog." -ForegroundColor Yellow
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
+    }
+
+    # Take the first (most relevant) match
+    $DriverPack = $MatchingPacks | Select-Object -First 1
+    $DriverPackUrl = "https://downloads.dell.com/$($DriverPack.path)"
+    $DriverPackFilename = Split-Path $DriverPack.path -Leaf
+    $DriverPackDownload = Join-Path $TempDir $DriverPackFilename
+    $DriverExtractDir = Join-Path $TempDir "Drivers"
+
+    Write-Host "Found driver pack: $($DriverPack.Name)" -ForegroundColor Green
+    Write-Host "Release date: $($DriverPack.releaseDate)" -ForegroundColor DarkCyan
+    Write-Host "Download URL: $DriverPackUrl" -ForegroundColor DarkCyan
+
+    # --- Step 4: Download driver pack ---
+    Write-Host "`nDownloading driver pack (~500MB-1.5GB). This may take a while..." -ForegroundColor Cyan
+    try {
+        Invoke-WebRequest -Uri $DriverPackUrl -OutFile $DriverPackDownload -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Write-Host "ERROR: Failed to download driver pack." -ForegroundColor Red
+        Write-Host $_.Exception.Message -ForegroundColor Red
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
+    }
+
+    # --- Step 5: Extract drivers ---
+    Write-Host "Extracting driver pack..." -ForegroundColor Cyan
+    if (-not (Test-Path $DriverExtractDir)) { New-Item -Path $DriverExtractDir -ItemType Directory -Force | Out-Null }
+
+    if ($DriverPackFilename -match '\.cab$') {
+        expand.exe $DriverPackDownload -F:* $DriverExtractDir | Out-Null
+    } elseif ($DriverPackFilename -match '\.exe$') {
+        Start-Process -FilePath $DriverPackDownload -ArgumentList "/s /e=$DriverExtractDir" -Wait -NoNewWindow
+    } else {
+        Write-Host "ERROR: Unknown driver pack format: $DriverPackFilename" -ForegroundColor Red
+        exit
+    }
+
+    # --- Step 6: Install drivers via pnputil ---
+    Write-Host "Installing drivers using pnputil. This may take several minutes..." -ForegroundColor Cyan
+    $infFiles = Get-ChildItem -Path $DriverExtractDir -Recurse -Filter "*.inf" -File
+    $infCount = $infFiles.Count
+    Write-Host "Found $infCount driver INF files to process." -ForegroundColor DarkCyan
+
+    $pnpResult = pnputil.exe /add-driver "$DriverExtractDir\*.inf" /subdirs /install 2>&1
+    $pnpResult | ForEach-Object { Write-Host $_ -ForegroundColor Gray }
+
+    # --- Step 7: Cleanup temp files ---
+    Write-Host "`nCleaning up temporary files..." -ForegroundColor DarkCyan
+    Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+
+    Write-Host "`nDell driver pack installation completed successfully!" -ForegroundColor Green
+    Write-Host "A reboot is recommended to finalize driver installation." -ForegroundColor Yellow
 }
 
 Write-Host "`n--- UPDATE PROCESS FULLY COMPLETED ---" -ForegroundColor Green
