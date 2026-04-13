@@ -484,7 +484,8 @@ if ($SystemManufacturer -notmatch 'Dell') {
     # Mark phase as completed
     New-Item -Path $DellFlagPath -ItemType File -Force | Out-Null
     Log "Dell progress flag created: $DellFlagPath" -Color DarkGray
-}
+    } # End of Dell manufacturer check else
+} # End of DellFlagPath check else
 
 # =============================================================================
 # PHASE 3: WINDOWS 11 25H2 UPGRADE VIA ISO
@@ -608,13 +609,19 @@ if (Test-Path $Win11FlagPath) {
                 # Interpret exit codes
                 # https://learn.microsoft.com/en-us/windows/deployment/upgrade/resolution-procedures
                 switch ($setupExitCode) {
-                    0, 0x3 {
-                        $msg = if ($setupExitCode -eq 0) { "completed successfully!" } else { "succeeded but a reboot is required." }
-                        Log "Windows 11 25H2 upgrade $msg" -Color Green
-                        # Mark phase as completed
+                    0 {
+                        Log "Windows 11 25H2 upgrade completed successfully!" -Color Green
                         New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
                         Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
-                        
+                        Log "The system will reboot in 30 seconds..." -Color Red
+                        Start-Sleep -Seconds 30
+                        Restart-Computer -Force
+                        exit
+                    }
+                    0x3 {
+                        Log "Windows 11 25H2 upgrade succeeded but a reboot is required." -Color Green
+                        New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
+                        Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
                         Log "The system will reboot in 30 seconds..." -Color Red
                         Start-Sleep -Seconds 30
                         Restart-Computer -Force
