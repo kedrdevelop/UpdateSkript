@@ -550,11 +550,11 @@ if (Test-Path $Win11FlagPath) {
                 Log "This process will take 20-60 minutes. The screen may go black during installation." -Color Yellow
                 Log "DO NOT turn off the computer!" -Color Red
                 Log "" -Color White
-                Log "Command: $SetupPath /auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning" -Color DarkGray
+                Log "Command: $SetupPath /auto upgrade /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning" -Color DarkGray
+                # Note: /quiet removed to allow more transparency in monitoring
 
                 # Run the upgrade with live progress monitoring
-                $setupArgs = "/auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning"
-
+                $setupArgs = "/auto upgrade /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning"
                 $setupProcess = Start-Process -FilePath $SetupPath -ArgumentList $setupArgs -PassThru -NoNewWindow
 
                 # Monitor setup progress via log file
@@ -572,35 +572,63 @@ if (Test-Path $Win11FlagPath) {
                 $lastLabel = 'Starting Windows Setup...'
                 $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
 
+                $lastLogPos = 0
                 while (-not $setupProcess.HasExited) {
                     $elapsedMin = [math]::Round($elapsed.Elapsed.TotalMinutes, 1)
 
-                    # Try to read the latest phase from Setup log
+                    # Real-time Log Monitoring (Tail)
                     if (Test-Path $setupLog) {
                         try {
-                            $tail = Get-Content $setupLog -Tail 30 -ErrorAction SilentlyContinue
+                            $fileStream = New-Object System.IO.FileStream($setupLog, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                            if ($fileStream.Length -gt $lastLogPos) {
+                                $fileStream.Seek($lastLogPos, [System.IO.SeekOrigin]::Begin) | Out-Null
+                                $reader = New-Object System.IO.StreamReader($fileStream)
+                                while ($line = $reader.ReadLine()) {
+                                    # Filter for relevant progress or errors to avoid flooding
+                                    if ($line -match 'Progress|Error|Warning|Phase|Operation|Migrating|Installing|Setting up') {
+                                        # Basic sanitization of log lines
+                                        $cleanLine = $line.Substring([math]::Max(0, $line.IndexOf(']') + 1)).Trim()
+                                        if ($cleanLine.Length -gt 5) {
+                                            Log "  [Setup Log] $cleanLine" -Color DarkGray
+                                        }
+                                    }
+                                }
+                                $lastLogPos = $fileStream.Position
+                                $reader.Close()
+                            }
+                            $fileStream.Close()
+                        } catch { }
+                    }
+
+                    # Update Progress Bar logic
+                    if (Test-Path $setupLog) {
+                        try {
+                            $tail = Get-Content $setupLog -Tail 50 -ErrorAction SilentlyContinue
                             foreach ($phase in $phases) {
                                 if ($tail -match $phase.Pattern) {
                                     if ($phase.Pct -gt $lastPct) {
                                         $lastPct   = $phase.Pct
                                         $lastLabel = $phase.Label
+                                        Log ">> Deployment Phase changed: $lastLabel ($lastPct %)" -Color Cyan
                                     }
                                 }
                             }
                         } catch { }
                     }
 
-                    Write-Progress -Activity "Phase 3: Windows 11 25H2 Upgrade ($elapsedMin min)" `
-                                   -Status $lastLabel `
+                    Write-Progress -Activity "Phase 3: Windows 11 Upgrade ($elapsedMin min)" `
+                                   -Status "$lastLabel | Log monitoring active..." `
                                    -PercentComplete $lastPct
-                    Start-Sleep -Seconds 5
+                    Start-Sleep -Seconds 10
                 }
                 $elapsed.Stop()
-                Write-Progress -Activity "Phase 3: Windows 11 25H2 Upgrade" -Completed
+                Write-Progress -Activity "Phase 3: Windows 11 Upgrade" -Completed
                 $totalMin = [math]::Round($elapsed.Elapsed.TotalMinutes, 1)
 
+                # Robust Exit Code capture
                 $setupExitCode = $setupProcess.ExitCode
-                Log "Windows Setup finished in $totalMin minutes. Exit code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Cyan
+                $hexExitCode = if ($null -ne $setupExitCode) { "0x{0:X8}" -f $setupExitCode } else { "Unknown" }
+                Log "Windows Setup finished in $totalMin minutes. Exit code: $setupExitCode ($hexExitCode)" -Color Cyan
 
                 # Dismount the ISO
                 Log "Dismounting ISO..." -Color DarkCyan
@@ -641,7 +669,8 @@ if (Test-Path $Win11FlagPath) {
                         if ($setupExitCode -eq -1) {
                             Log "Setup process was terminated or did not return a valid exit code." -Color Yellow
                         } else {
-                            Log "Upgrade finished with unexpected code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Yellow
+                            $hexExitCode = if ($null -ne $setupExitCode) { "0x{0:X8}" -f $setupExitCode } else { "Unknown" }
+                            Log "Upgrade finished with unexpected code: $setupExitCode ($hexExitCode)" -Color Yellow
                         }
                         Log "Check upgrade logs at: C:\`$WINDOWS.~BT\Sources\Panther\setupact.log" -Color DarkGray
                         Log "Also check: C:\`$WINDOWS.~BT\Sources\Panther\setuperr.log" -Color DarkGray
