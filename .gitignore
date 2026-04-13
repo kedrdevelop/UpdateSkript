@@ -1,10 +1,29 @@
-# Ignore all executable files
-*.exe
+# .NET Build Artifacts
+[Bb]in/
+[Oo]bj/
 
-# Ignore all text files
-*.txt
+# User-specific files
+*.user
+*.userosscache
+*.sln.docstates
 
-DriverPackCatalog.xml
+# Visual Studio files
+.vs/
+_ReSharper*/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.cache
+*.opendb
+
+# Publish output
+/publish/
+
+# Log files
 *.log
+UpdateSkriptApp/Logs/
 
+logs.txt
 *.iso
+*.zip
