@@ -1,6 +1,9 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System;
 using System.Collections.ObjectModel;
+using System.Threading.Tasks;
+using System.Windows.Media;
 
 namespace UpdateSkriptApp.ViewModels
 {
@@ -27,7 +30,7 @@ namespace UpdateSkriptApp.ViewModels
         private string _currentAction = "Waiting for user...";
 
         [ObservableProperty]
-        private string _statusColor = "#007ACC"; // Default Blue
+        private SolidColorBrush _statusBrush = new SolidColorBrush(Color.FromRgb(0, 122, 204)); // Default Blue
 
         public MainViewModel()
         {
@@ -90,14 +93,14 @@ namespace UpdateSkriptApp.ViewModels
         {
             try
             {
-                StatusColor = "#007ACC"; // Blue
+                StatusBrush = new SolidColorBrush(Color.FromRgb(0, 122, 204)); // Blue
                 await _engine.RunDeploymentAsync();
-                StatusColor = "#28A745"; // Success Green
+                StatusBrush = new SolidColorBrush(Color.FromRgb(40, 167, 69)); // Success Green
                 CurrentAction = "Deployment Completed Successfully.";
             }
             catch (Exception ex)
             {
-                StatusColor = "#DC3545"; // Error Red
+                StatusBrush = new SolidColorBrush(Color.FromRgb(220, 53, 69)); // Error Red
                 _logger.Log($"Critical error during deployment: {ex.Message}", "Red");
             }
         }

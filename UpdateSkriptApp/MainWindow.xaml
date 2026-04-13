@@ -26,7 +26,7 @@
 
         <!-- Header -->
         <StackPanel Grid.Row="0" Margin="0,0,0,20">
-            <TextBlock Text="WINDOWS &amp; DRIVER DEPLOYMENT" FontSize="24" FontWeight="Bold" Foreground="{Binding StatusColor}"/>
+            <TextBlock Text="WINDOWS &amp; DRIVER DEPLOYMENT" FontSize="24" FontWeight="Bold" Foreground="{Binding StatusBrush}"/>
             <Rectangle Height="1" Fill="#333" Margin="0,5,0,0"/>
         </StackPanel>
 
@@ -66,10 +66,10 @@
         <StackPanel Grid.Row="3" Margin="0,20,0,10">
             <Grid>
                 <TextBlock Text="{Binding CurrentAction, FallbackValue='Ready to start'}" HorizontalAlignment="Left" Foreground="Gray"/>
-                <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0}%}" HorizontalAlignment="Right" Foreground="{Binding StatusColor}"/>
+                <TextBlock Text="{Binding ProgressPercentage, StringFormat={}{0}%}" HorizontalAlignment="Right" Foreground="{Binding StatusBrush}"/>
             </Grid>
             <ProgressBar Value="{Binding ProgressPercentage}" Height="10" Margin="0,5,0,0" 
-                         Background="#333" Foreground="{Binding StatusColor}" BorderThickness="0"/>
+                         Background="#333" Foreground="{Binding StatusBrush}" BorderThickness="0"/>
         </StackPanel>
 
         <!-- Buttons -->
