@@ -1,3 +1,9 @@
+# Build Artifacts
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+
 # Ignore all executable files
 *.exe
 
