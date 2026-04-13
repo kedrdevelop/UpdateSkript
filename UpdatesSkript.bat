@@ -196,12 +196,16 @@ if ($SystemManufacturer -notmatch 'Dell') {
     $CabPath = Join-Path $TempDir "DriverPackCatalog.cab"
     $XmlPath = Join-Path $TempDir "DriverPackCatalog.xml"
 
-    if (-not (Test-Path $TempDir)) { New-Item -Path $TempDir -ItemType Directory -Force | Out-Null }
+    # Clean up temp dir first to avoid using stale cached files
+    if (Test-Path $TempDir) {
+        Log "Removing stale temp directory from previous run..." -Color DarkGray
+        Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    New-Item -Path $TempDir -ItemType Directory -Force | Out-Null
     Log "Temp directory: $TempDir" -Color DarkGray
 
-    Log "Downloading Dell Driver Pack Catalog (~30 MB)..." -Color Cyan
-    # MinExpectedBytes = 5 MB - a valid catalog is always much larger
-    $downloadOk = Download-File -Url $CatalogUrl -Destination $CabPath -MaxRetries 3 -MinExpectedBytes 5000000
+    Log "Downloading Dell Driver Pack Catalog (~300 KB compressed)..." -Color Cyan
+    $downloadOk = Download-File -Url $CatalogUrl -Destination $CabPath -MaxRetries 3
 
     if (-not $downloadOk) {
         Log "CRITICAL: Could not download Dell catalog after multiple retries." -Color Red
@@ -231,9 +235,16 @@ if ($SystemManufacturer -notmatch 'Dell') {
     Log "Parsing catalog for model: $SystemModel" -Color Cyan
     [xml]$Catalog = Get-Content $XmlPath
 
+    # Map OS build to Dell osCode values
     $OSBuild = [System.Environment]::OSVersion.Version.Build
-    if ($OSBuild -ge 22000) { $OSTarget = "Windows 11" } else { $OSTarget = "Windows 10" }
-    Log "Target OS: $OSTarget (Build $OSBuild)" -Color DarkCyan
+    if ($OSBuild -ge 22000) {
+        $OSTarget = "Windows 11"
+        $OsCodeTargets = @('Windows11', 'Windows10') # Win11 packs often use Win10 code
+    } else {
+        $OSTarget = "Windows 10"
+        $OsCodeTargets = @('Windows10')
+    }
+    Log "Target OS: $OSTarget (Build $OSBuild), checking osCodes: $($OsCodeTargets -join ', ')" -Color DarkCyan
 
     $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
         $modelMatch = $false
@@ -248,7 +259,8 @@ if ($SystemManufacturer -notmatch 'Dell') {
         }
         $osMatch = $false
         foreach ($os in $_.SupportedOperatingSystems.OperatingSystem) {
-            if ($os.Display -match $OSTarget -and $os.osArch -eq 'x64') {
+            # Use osCode attribute (e.g. 'Windows10','Windows11') instead of CDATA Display text
+            if ($OsCodeTargets -contains $os.osCode -and $os.osArch -eq 'x64') {
                 $osMatch = $true
                 break
             }
@@ -276,7 +288,11 @@ if ($SystemManufacturer -notmatch 'Dell') {
 
     if (-not $MatchingPacks) {
         Log "ERROR: No driver pack found for Dell model '$SystemModel'." -Color Red
-        Log "This model may not have an enterprise driver pack in the Dell catalog." -Color Yellow
+        Log "This model may be too new or not included in the Dell enterprise DriverPackCatalog." -Color Yellow
+        Log "Please download drivers manually from the Dell Support website:" -Color Yellow
+        # Build a search-friendly model name for the URL
+        $UrlModel = [System.Uri]::EscapeDataString($SystemModel)
+        Log "  https://www.dell.com/support/home/en-us/product-support/product/$UrlModel/drivers" -Color Cyan
         Log "Exiting script to preserve progress flags." -Color Red
         exit
     }
