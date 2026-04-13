@@ -106,25 +106,63 @@ if ($SystemManufacturer -notmatch 'Dell') {
     $XmlPath = Join-Path $TempDir "DriverPackCatalog.xml"
 
     if (-not (Test-Path $TempDir)) { New-Item -Path $TempDir -ItemType Directory -Force | Out-Null }
+    Write-Host "Temp directory: $TempDir" -ForegroundColor DarkGray
 
-    Write-Host "Downloading Dell Driver Pack Catalog..." -ForegroundColor Cyan
+    Write-Host "Downloading Dell Driver Pack Catalog from: $CatalogUrl" -ForegroundColor Cyan
+    Write-Host "Please wait, this file is approximately 30 MB..." -ForegroundColor DarkCyan
     try {
+        $ProgressPreference = 'SilentlyContinue'
         Invoke-WebRequest -Uri $CatalogUrl -OutFile $CabPath -UseBasicParsing -ErrorAction Stop
+        $ProgressPreference = 'Continue'
     } catch {
-        Write-Host "ERROR: Failed to download Dell catalog. Check your internet connection." -ForegroundColor Red
-        Write-Host $_.Exception.Message -ForegroundColor Red
+        Write-Host "ERROR: Failed to download Dell catalog." -ForegroundColor Red
+        Write-Host "Exception: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "Hint: Check internet connection and TLS settings." -ForegroundColor Yellow
+        Write-Host "Current TLS protocols: $([Net.ServicePointManager]::SecurityProtocol)" -ForegroundColor DarkGray
         Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
         exit
     }
 
-    Write-Host "Extracting catalog XML..." -ForegroundColor Cyan
-    expand.exe $CabPath -F:DriverPackCatalog.xml $TempDir | Out-Null
+    # Verify the downloaded file
+    if (-not (Test-Path $CabPath)) {
+        Write-Host "ERROR: CAB file was not saved to disk at: $CabPath" -ForegroundColor Red
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
+    }
+
+    $CabSize = (Get-Item $CabPath).Length
+    $CabSizeMB = [math]::Round($CabSize / 1MB, 2)
+    Write-Host "Download complete. File size: $CabSizeMB MB ($CabSize bytes)" -ForegroundColor Green
+
+    if ($CabSize -lt 1000000) {
+        Write-Host "WARNING: Downloaded file is suspiciously small (< 1 MB). It may not be a valid CAB file." -ForegroundColor Yellow
+        Write-Host "First 500 bytes of the file content:" -ForegroundColor DarkGray
+        $rawBytes = [System.IO.File]::ReadAllBytes($CabPath)
+        $preview = [System.Text.Encoding]::ASCII.GetString($rawBytes, 0, [Math]::Min(500, $rawBytes.Length))
+        Write-Host $preview -ForegroundColor DarkGray
+        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        exit
+    }
+
+    Write-Host "Extracting catalog XML using expand.exe..." -ForegroundColor Cyan
+    $expandOutput = expand.exe $CabPath -F:DriverPackCatalog.xml $TempDir 2>&1
+    Write-Host "expand.exe output: $expandOutput" -ForegroundColor DarkGray
 
     if (-not (Test-Path $XmlPath)) {
         Write-Host "ERROR: Failed to extract DriverPackCatalog.xml" -ForegroundColor Red
+        Write-Host "The CAB file may be corrupted or in an unexpected format." -ForegroundColor Yellow
+        Write-Host "CAB file path: $CabPath" -ForegroundColor DarkGray
+        Write-Host "Expected XML path: $XmlPath" -ForegroundColor DarkGray
+        # List what files are in the temp directory
+        Write-Host "Files in temp directory:" -ForegroundColor DarkGray
+        Get-ChildItem -Path $TempDir | ForEach-Object { Write-Host "  $($_.Name) ($($_.Length) bytes)" -ForegroundColor DarkGray }
         Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
         exit
     }
+
+    $XmlSize = (Get-Item $XmlPath).Length
+    $XmlSizeMB = [math]::Round($XmlSize / 1MB, 2)
+    Write-Host "Catalog XML extracted successfully. Size: $XmlSizeMB MB" -ForegroundColor Green
 
     # --- Step 3: Find matching driver pack ---
     Write-Host "Parsing catalog for model: $SystemModel ..." -ForegroundColor Cyan
