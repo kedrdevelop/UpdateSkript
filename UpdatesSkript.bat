@@ -583,16 +583,31 @@ if (Test-Path $Win11FlagPath) {
                             if ($fileStream.Length -gt $lastLogPos) {
                                 $fileStream.Seek($lastLogPos, [System.IO.SeekOrigin]::Begin) | Out-Null
                                 $reader = New-Object System.IO.StreamReader($fileStream)
+                                $lastRead = ""
+                                $printedInBatch = 0
+                                
                                 while ($line = $reader.ReadLine()) {
-                                    # Filter for relevant progress or errors to avoid flooding
-                                    if ($line -match 'Progress|Error|Warning|Phase|Operation|Migrating|Installing|Setting up') {
-                                        # Basic sanitization of log lines
+                                    $lastRead = $line
+                                    # Filter for relevant progress or errors to avoid flooding (setupact.log can be huge)
+                                    if ($line -match 'Progress|Error|Warning|Phase|Operation|Migrating|Installing|Setting up|Percent') {
+                                        # Basic sanitization of log lines (removing timestamp and thread ID for clean output)
                                         $cleanLine = $line.Substring([math]::Max(0, $line.IndexOf(']') + 1)).Trim()
                                         if ($cleanLine.Length -gt 5) {
                                             Log "  [Setup Log] $cleanLine" -Color DarkGray
+                                            $printedInBatch++
                                         }
                                     }
                                 }
+                                
+                                # Heartbeat: Always print the very last line we read if we didn't print anything in this batch
+                                # This guarantees the user ALWAYS sees that the process is alive.
+                                if ($printedInBatch -eq 0 -and $null -ne $lastRead -and $lastRead.Length -gt 0) {
+                                    $hbLine = $lastRead.Substring([math]::Max(0, $lastRead.IndexOf(']') + 1)).Trim()
+                                    if ($hbLine.Length -gt 0) {
+                                        Log "  [Setup Active] $hbLine" -Color DarkCyan
+                                    }
+                                }
+                                
                                 $lastLogPos = $fileStream.Position
                                 $reader.Close()
                             }
@@ -681,13 +696,53 @@ if (Test-Path $Win11FlagPath) {
     }
 }
 }
+# =============================================================================
+# PHASE 4: OOBE RESEAL (SYSPREP)
+# =============================================================================
+if ((Test-Path $WuFlagPath) -and (Test-Path $DellFlagPath) -and (Test-Path $Win11FlagPath)) {
+    Log "" -Color White
+    Log "--- PHASE 4: OOBE RESEAL (SYSPREP) ---" -Color Magenta
+    Log "All previous phases are completed. The system is ready for the Golden Master reseal." -Color Green
+    
+    $SysprepChoice = Read-Host "Do you want to finalize this PC for deployment (Sysprep -> OOBE)? (y/N)"
+    if ($SysprepChoice -match '^[yY]') {
+        Log "Preparing system for Out-Of-Box Experience (OOBE)..." -Color Cyan
+
+        # 1. Remove Microsoft Upgrade Block
+        $UpgradeKey = "HKLM:\SYSTEM\Setup\Upgrade"
+        if (Test-Path $UpgradeKey) {
+            Log "Removing Upgrade registry key to bypass Microsoft Sysprep block..." -Color Yellow
+            Remove-Item -Path $UpgradeKey -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # 2. Cleanup defaultuser0
+        Log "Cleaning up temporary defaultuser0 profile..." -Color Yellow
+        net user defaultuser0 /delete 2>&1 | Out-Null
+        $DefaultUserDir = "C:\Users\defaultuser0"
+        if (Test-Path $DefaultUserDir) {
+            Remove-Item -Path $DefaultUserDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        # 3. Clean our flags
+        Log "Removing temporary deployment flags..." -Color DarkGray
+        Remove-Item -Path $WuFlagPath, $DellFlagPath, $Win11FlagPath -Force -ErrorAction SilentlyContinue
+
+        # 4. Trigger Sysprep
+        Log "Running Sysprep (Generalize + OOBE)... The PC will SHUT DOWN when finished." -Color Red
+        Log "DO NOT INTERRUPT. The next boot will be the clean OOBE Autopilot screen." -Color Cyan
+        Start-Sleep -Seconds 5
+        Start-Process -FilePath "$env:WINDIR\system32\sysprep\sysprep.exe" -ArgumentList "/oobe /generalize /shutdown /quiet" -Wait -NoNewWindow
+        exit
+    } else {
+        Log "Skipping Phase 4. System remains in Audit Mode." -Color Yellow
+    }
+}
 
 # =============================================================================
 # DONE
 # =============================================================================
 Log "" -Color White
 Log "========================================" -Color Green
-Log "UPDATE PROCESS FULLY COMPLETED" -Color Green
+Log "UPDATE PROCESS REACHED STANDBY" -Color Green
 Log "========================================" -Color Green
-Log "No further Windows, Dell or OS updates are available." -Color Cyan
-Log "State files are preserved in $env:PUBLIC for future maintenance." -Color DarkGray
+Log "Check the logs above for completed phases." -Color Cyan
