@@ -128,27 +128,15 @@ namespace UpdateSkriptApp.Services
 
             _logger.Log("Parsing Dell Catalog...", "DarkGray");
             
-            // Senior-level XML Parsing using LINQ to XML
-            var doc = System.Xml.Linq.XDocument.Load(xmlPath);
-            
-            // Get Model and Manufacturer from properties
-            string currentModel = SystemModel; 
-            
-            // Filter logic (simulating the complex PS logic)
-            var driverPack = doc.Descendants("DriverPack")
-                .FirstOrDefault(dp => 
-                    dp.Descendants("SupportedModel").Any(m => m.Element("Display")?.Value.Contains(currentModel, StringComparison.OrdinalIgnoreCase) == true) &&
-                    dp.Attribute("osCode")?.Value == "WT64A" // Windows 10/11 x64
-                );
+            string xmlContent = File.ReadAllText(xmlPath);
+            var match = DellCatalogParser.FindMatch(xmlContent, SystemModel);
 
-            if (driverPack != null)
+            if (match != null)
             {
-                string downloadPath = driverPack.Attribute("path")?.Value ?? "";
-                string fullUrl = $"https://downloads.dell.com/{downloadPath}";
-                string packName = Path.GetFileName(downloadPath);
-                string packDest = Path.Combine(tempDir, packName);
+                string fullUrl = $"https://downloads.dell.com/{match.Path}";
+                string packDest = Path.Combine(tempDir, match.Name);
 
-                _logger.Log($"Found matching Driver Pack: {packName}", "Cyan");
+                _logger.Log($"Found matching Driver Pack: {match.Name}", "Cyan");
                 
                 if (await DownloadFileWithProgressAsync(fullUrl, packDest, "Downloading Driver Pack"))
                 {
@@ -170,7 +158,7 @@ namespace UpdateSkriptApp.Services
             }
             else
             {
-                _logger.Log($"No matching factor-certified driver pack found for model: {currentModel}", "Yellow");
+                _logger.Log($"No matching factor-certified driver pack found for model: {SystemModel}", "Yellow");
                 _stateService.MarkPhaseCompleted("Dell"); // Skip if not found
             }
         }
