@@ -215,7 +215,8 @@ if ($SystemManufacturer -notmatch 'Dell') {
     }
 
     Log "Extracting catalog XML using expand.exe..." -Color Cyan
-    $expandOutput = expand.exe $CabPath -F:DriverPackCatalog.xml $TempDir 2>&1
+    # Must pass explicit output FILE path, not a directory — expand.exe refuses to extract to same folder
+    $expandOutput = expand.exe $CabPath $XmlPath 2>&1
     $expandOutput | ForEach-Object { Log "  expand: $_" -Color DarkGray }
 
     if (-not (Test-Path $XmlPath)) {
