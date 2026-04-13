@@ -19,37 +19,125 @@ param(
 # --- Configuration & Paths ---
 $ScriptDir = Split-Path -Path $OriginalScriptPath
 $WuFlagPath = "$env:PUBLIC\UpdateSkript_WU.flag"
+$LogFile = Join-Path $ScriptDir "UpdatesSkript.log"
 
-function udf_EnsureTls12 {
-    $currentProtocol = [Net.ServicePointManager]::SecurityProtocol
-    if ($currentProtocol -notmatch 'Tls12') {
-        Write-Host "Enabling TLS 1.2 support..." -ForegroundColor Yellow
-        [Net.ServicePointManager]::SecurityProtocol = $currentProtocol -bor [Net.SecurityProtocolType]::Tls12
+# --- Logging Function ---
+# Writes a timestamped message to both the console and the log file
+function Log {
+    param(
+        [string]$Message,
+        [string]$Color = "White",
+        [switch]$NoConsole
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logLine = "[$timestamp] $Message"
+    Add-Content -Path $LogFile -Value $logLine -Encoding UTF8
+    if (-not $NoConsole) {
+        Write-Host $logLine -ForegroundColor $Color
     }
 }
 
-Write-Host "`n--- WINDOWS UPDATES PHASE ---" -ForegroundColor Magenta
+# --- Reliable Download Function ---
+# Uses WebClient with retry logic for stable large-file downloads
+function Download-File {
+    param(
+        [string]$Url,
+        [string]$Destination,
+        [int]$MaxRetries = 3,
+        [int]$MinExpectedBytes = 0
+    )
+    $attempt = 0
+    while ($attempt -lt $MaxRetries) {
+        $attempt++
+        Log "Download attempt $attempt/$MaxRetries : $Url" -Color DarkCyan
+        try {
+            $webClient = New-Object System.Net.WebClient
+            $webClient.DownloadFile($Url, $Destination)
+            $webClient.Dispose()
+
+            if (Test-Path $Destination) {
+                $fileSize = (Get-Item $Destination).Length
+                $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
+                Log "Downloaded $fileSizeMB MB ($fileSize bytes) -> $Destination" -Color Green
+
+                if ($MinExpectedBytes -gt 0 -and $fileSize -lt $MinExpectedBytes) {
+                    Log "WARNING: File is smaller than expected minimum ($MinExpectedBytes bytes). Retrying..." -Color Yellow
+                    Remove-Item -Path $Destination -Force -ErrorAction SilentlyContinue
+                    Start-Sleep -Seconds 5
+                    continue
+                }
+                return $true
+            } else {
+                Log "WARNING: File was not saved to disk. Retrying..." -Color Yellow
+            }
+        } catch {
+            Log "ERROR on attempt $attempt : $($_.Exception.Message)" -Color Red
+        }
+        Start-Sleep -Seconds 5
+    }
+    Log "FAILED: Could not download after $MaxRetries attempts: $Url" -Color Red
+    return $false
+}
+
+# --- TLS Configuration ---
+function udf_EnsureTls12 {
+    $currentProtocol = [Net.ServicePointManager]::SecurityProtocol
+    if ($currentProtocol -notmatch 'Tls12') {
+        Log "Enabling TLS 1.2 support... (was: $currentProtocol)" -Color Yellow
+        [Net.ServicePointManager]::SecurityProtocol = $currentProtocol -bor [Net.SecurityProtocolType]::Tls12
+    } else {
+        Log "TLS 1.2 is already enabled. ($currentProtocol)" -Color DarkGray
+    }
+}
+
+# =============================================================================
+# START
+# =============================================================================
+Log "========================================" -Color Magenta
+Log "UPDATE SCRIPT STARTED" -Color Magenta
+Log "Script directory: $ScriptDir" -Color DarkGray
+Log "========================================" -Color Magenta
+
 udf_EnsureTls12
 
+# =============================================================================
+# PHASE 1: WINDOWS UPDATES
+# =============================================================================
+Log "" -Color White
+Log "--- WINDOWS UPDATES PHASE ---" -Color Magenta
+
 if (Test-Path $WuFlagPath) {
-    Write-Host "Windows Updates were already completed previously. Skipping this phase." -ForegroundColor Green
+    Log "Windows Updates were already completed previously. Skipping this phase." -Color Green
+    Log "Flag file: $WuFlagPath" -Color DarkGray
 } else {
-    Write-Host "Preparing NuGet provider..." -ForegroundColor Cyan
+    Log "Preparing NuGet provider..." -Color Cyan
     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
 
-    Write-Host "Loading PSWindowsUpdate module..." -ForegroundColor Cyan
+    Log "Loading PSWindowsUpdate module..." -Color Cyan
     Install-Module -Name PSWindowsUpdate -Force -AllowClobber -SkipPublisherCheck -ErrorAction SilentlyContinue
     Import-Module PSWindowsUpdate
 
-    Write-Host "Scanning and installing Windows updates. This may take a while..." -ForegroundColor Cyan
+    Log "Scanning for Windows updates..." -Color Cyan
 
-    # Get available updates, filter them, and install safely to avoid pipeline binding issues
+    # Get available updates, filter out known looping updates
     $pendingUpdates = Get-WindowsUpdate
+    $pendingCount = @($pendingUpdates).Count
+    Log "Found $pendingCount total updates in pre-search." -Color DarkCyan
+
     $filteredUpdates = $pendingUpdates | Where-Object { $_.Title -notmatch 'Security Intelligence Update|Malicious Software Removal Tool|Antimalware Platform|Security platform' }
+    $filteredCount = @($filteredUpdates).Count
+    Log "After filtering looping updates: $filteredCount updates eligible for installation." -Color DarkCyan
+
+    if ($filteredUpdates) {
+        foreach ($update in $filteredUpdates) {
+            Log "  -> $($update.Title) [KB$($update.KB)]" -Color DarkGray
+        }
+    }
 
     $Result = @()
     if ($filteredUpdates) {
         foreach ($update in $filteredUpdates) {
+            Log "Installing: $($update.Title)..." -Color Cyan
             if ($update.KB) {
                 Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
                 if ($tempRes) { $Result += $tempRes }
@@ -66,38 +154,41 @@ if (Test-Path $WuFlagPath) {
         $resultArray = @($Result)
         $installedCount = ($resultArray | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
         if ($installedCount -gt 0) { $updatesInstalled = $true }
+        Log "Installation result: $installedCount updates installed." -Color DarkCyan
     }
 
-    # We unconditionally restart the computer if Windows Updates were installed, to allow multiple passes.
     if ($updatesInstalled) {
-        Write-Host "`nWindows Updates were installed successfully!" -ForegroundColor Green
-        Write-Host "To ensure all dependent updates are caught, the system will now reboot." -ForegroundColor Yellow
-        Write-Host "Please MANUALLY rerun this script after rebooting to continue the process." -ForegroundColor Red
-        
+        Log "Windows Updates were installed successfully!" -Color Green
+        Log "System will reboot in 10 seconds to allow dependent updates." -Color Yellow
+        Log "Please MANUALLY rerun this script after rebooting." -Color Red
+
         Start-Sleep -Seconds 10
         Restart-Computer -Force
         exit
     }
 
-    # If no updates were installed, we mark the phase as completed to skip it on next run
-    Write-Host "`nNo new Windows Updates were found. Marking phase as completed." -ForegroundColor Green
+    Log "No new Windows Updates to install. Marking phase as completed." -Color Green
     New-Item -Path $WuFlagPath -ItemType File -Force | Out-Null
+    Log "Flag file created: $WuFlagPath" -Color DarkGray
 }
 
-# If no updates were installed, we proceed to Dell updates
-Write-Host "`nNo new Windows Updates were found. Proceeding to Dell updates..." -ForegroundColor Green
-
-Write-Host "`n--- DELL DRIVER PACK PHASE ---" -ForegroundColor Magenta
+# =============================================================================
+# PHASE 2: DELL DRIVER PACK
+# =============================================================================
+Log "" -Color White
+Log "--- DELL DRIVER PACK PHASE ---" -Color Magenta
 
 # --- Step 1: Identify the system ---
 $SystemInfo = Get-CimInstance Win32_ComputerSystem
 $SystemModel = $SystemInfo.Model.Trim()
 $SystemManufacturer = $SystemInfo.Manufacturer.Trim()
+Log "Manufacturer: $SystemManufacturer" -Color DarkGray
+Log "Model: $SystemModel" -Color DarkGray
 
 if ($SystemManufacturer -notmatch 'Dell') {
-    Write-Host "This system is not manufactured by Dell ($SystemManufacturer). Skipping Dell driver phase." -ForegroundColor Yellow
+    Log "This system is not manufactured by Dell. Skipping Dell driver phase." -Color Yellow
 } else {
-    Write-Host "Detected Dell system model: $SystemModel" -ForegroundColor Cyan
+    Log "Confirmed Dell system: $SystemModel" -Color Cyan
 
     # --- Step 2: Download and extract Dell Driver Pack Catalog ---
     $CatalogUrl = "https://downloads.dell.com/catalog/DriverPackCatalog.cab"
@@ -106,75 +197,43 @@ if ($SystemManufacturer -notmatch 'Dell') {
     $XmlPath = Join-Path $TempDir "DriverPackCatalog.xml"
 
     if (-not (Test-Path $TempDir)) { New-Item -Path $TempDir -ItemType Directory -Force | Out-Null }
-    Write-Host "Temp directory: $TempDir" -ForegroundColor DarkGray
+    Log "Temp directory: $TempDir" -Color DarkGray
 
-    Write-Host "Downloading Dell Driver Pack Catalog from: $CatalogUrl" -ForegroundColor Cyan
-    Write-Host "Please wait, this file is approximately 30 MB..." -ForegroundColor DarkCyan
-    try {
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri $CatalogUrl -OutFile $CabPath -UseBasicParsing -ErrorAction Stop
-        $ProgressPreference = 'Continue'
-    } catch {
-        Write-Host "ERROR: Failed to download Dell catalog." -ForegroundColor Red
-        Write-Host "Exception: $($_.Exception.Message)" -ForegroundColor Red
-        Write-Host "Hint: Check internet connection and TLS settings." -ForegroundColor Yellow
-        Write-Host "Current TLS protocols: $([Net.ServicePointManager]::SecurityProtocol)" -ForegroundColor DarkGray
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+    Log "Downloading Dell Driver Pack Catalog (~30 MB)..." -Color Cyan
+    # MinExpectedBytes = 5 MB - a valid catalog is always much larger
+    $downloadOk = Download-File -Url $CatalogUrl -Destination $CabPath -MaxRetries 3 -MinExpectedBytes 5000000
+
+    if (-not $downloadOk) {
+        Log "CRITICAL: Could not download Dell catalog after multiple retries." -Color Red
+        Log "Current TLS protocols: $([Net.ServicePointManager]::SecurityProtocol)" -Color DarkGray
+        Log "Exiting script to preserve progress flags." -Color Red
         exit
     }
 
-    # Verify the downloaded file
-    if (-not (Test-Path $CabPath)) {
-        Write-Host "ERROR: CAB file was not saved to disk at: $CabPath" -ForegroundColor Red
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
-        exit
-    }
-
-    $CabSize = (Get-Item $CabPath).Length
-    $CabSizeMB = [math]::Round($CabSize / 1MB, 2)
-    Write-Host "Download complete. File size: $CabSizeMB MB ($CabSize bytes)" -ForegroundColor Green
-
-    if ($CabSize -lt 1000000) {
-        Write-Host "WARNING: Downloaded file is suspiciously small (< 1 MB). It may not be a valid CAB file." -ForegroundColor Yellow
-        Write-Host "First 500 bytes of the file content:" -ForegroundColor DarkGray
-        $rawBytes = [System.IO.File]::ReadAllBytes($CabPath)
-        $preview = [System.Text.Encoding]::ASCII.GetString($rawBytes, 0, [Math]::Min(500, $rawBytes.Length))
-        Write-Host $preview -ForegroundColor DarkGray
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
-        exit
-    }
-
-    Write-Host "Extracting catalog XML using expand.exe..." -ForegroundColor Cyan
+    Log "Extracting catalog XML using expand.exe..." -Color Cyan
     $expandOutput = expand.exe $CabPath -F:DriverPackCatalog.xml $TempDir 2>&1
-    Write-Host "expand.exe output: $expandOutput" -ForegroundColor DarkGray
+    $expandOutput | ForEach-Object { Log "  expand: $_" -Color DarkGray }
 
     if (-not (Test-Path $XmlPath)) {
-        Write-Host "ERROR: Failed to extract DriverPackCatalog.xml" -ForegroundColor Red
-        Write-Host "The CAB file may be corrupted or in an unexpected format." -ForegroundColor Yellow
-        Write-Host "CAB file path: $CabPath" -ForegroundColor DarkGray
-        Write-Host "Expected XML path: $XmlPath" -ForegroundColor DarkGray
-        # List what files are in the temp directory
-        Write-Host "Files in temp directory:" -ForegroundColor DarkGray
-        Get-ChildItem -Path $TempDir | ForEach-Object { Write-Host "  $($_.Name) ($($_.Length) bytes)" -ForegroundColor DarkGray }
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        Log "ERROR: Failed to extract DriverPackCatalog.xml" -Color Red
+        Log "CAB file path: $CabPath" -Color DarkGray
+        Log "Files in temp directory:" -Color DarkGray
+        Get-ChildItem -Path $TempDir | ForEach-Object { Log "  $($_.Name) ($($_.Length) bytes)" -Color DarkGray }
+        Log "Exiting script to preserve progress flags." -Color Red
         exit
     }
 
     $XmlSize = (Get-Item $XmlPath).Length
     $XmlSizeMB = [math]::Round($XmlSize / 1MB, 2)
-    Write-Host "Catalog XML extracted successfully. Size: $XmlSizeMB MB" -ForegroundColor Green
+    Log "Catalog XML extracted successfully. Size: $XmlSizeMB MB" -Color Green
 
     # --- Step 3: Find matching driver pack ---
-    Write-Host "Parsing catalog for model: $SystemModel ..." -ForegroundColor Cyan
+    Log "Parsing catalog for model: $SystemModel" -Color Cyan
     [xml]$Catalog = Get-Content $XmlPath
 
-    # Get the current OS version info for matching
-    $OSVersion = (Get-CimInstance Win32_OperatingSystem).Version
     $OSBuild = [System.Environment]::OSVersion.Version.Build
-
-    # Determine OS string to match (e.g. "Windows 11" or "Windows 10")
     if ($OSBuild -ge 22000) { $OSTarget = "Windows 11" } else { $OSTarget = "Windows 10" }
-    Write-Host "Target OS: $OSTarget (Build $OSBuild)" -ForegroundColor DarkCyan
+    Log "Target OS: $OSTarget (Build $OSBuild)" -Color DarkCyan
 
     $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
         $modelMatch = $false
@@ -198,8 +257,7 @@ if ($SystemManufacturer -notmatch 'Dell') {
     }
 
     if (-not $MatchingPacks) {
-        Write-Host "WARNING: No driver pack found for model '$SystemModel' and $OSTarget x64." -ForegroundColor Yellow
-        Write-Host "Trying a broader search by model name..." -ForegroundColor Yellow
+        Log "No exact match found. Trying broader search..." -Color Yellow
 
         $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
             $modelMatch = $false
@@ -217,9 +275,9 @@ if ($SystemManufacturer -notmatch 'Dell') {
     }
 
     if (-not $MatchingPacks) {
-        Write-Host "ERROR: No driver pack found for this Dell model ($SystemModel)." -ForegroundColor Red
-        Write-Host "This model may not have an enterprise driver pack available in the Dell catalog." -ForegroundColor Yellow
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+        Log "ERROR: No driver pack found for Dell model '$SystemModel'." -Color Red
+        Log "This model may not have an enterprise driver pack in the Dell catalog." -Color Yellow
+        Log "Exiting script to preserve progress flags." -Color Red
         exit
     }
 
@@ -230,51 +288,63 @@ if ($SystemManufacturer -notmatch 'Dell') {
     $DriverPackDownload = Join-Path $TempDir $DriverPackFilename
     $DriverExtractDir = Join-Path $TempDir "Drivers"
 
-    Write-Host "Found driver pack: $($DriverPack.Name)" -ForegroundColor Green
-    Write-Host "Release date: $($DriverPack.releaseDate)" -ForegroundColor DarkCyan
-    Write-Host "Download URL: $DriverPackUrl" -ForegroundColor DarkCyan
+    Log "Found driver pack: $($DriverPack.Name)" -Color Green
+    Log "Release date: $($DriverPack.releaseDate)" -Color DarkCyan
+    Log "File: $DriverPackFilename" -Color DarkCyan
+    Log "URL: $DriverPackUrl" -Color DarkGray
 
     # --- Step 4: Download driver pack ---
-    Write-Host "`nDownloading driver pack (~500MB-1.5GB). This may take a while..." -ForegroundColor Cyan
-    try {
-        Invoke-WebRequest -Uri $DriverPackUrl -OutFile $DriverPackDownload -UseBasicParsing -ErrorAction Stop
-    } catch {
-        Write-Host "ERROR: Failed to download driver pack." -ForegroundColor Red
-        Write-Host $_.Exception.Message -ForegroundColor Red
-        Write-Host "Exiting script to preserve progress flags." -ForegroundColor Red
+    Log "Downloading driver pack. This may take several minutes..." -Color Cyan
+    # MinExpectedBytes = 100 MB - driver packs are always large
+    $downloadOk = Download-File -Url $DriverPackUrl -Destination $DriverPackDownload -MaxRetries 3 -MinExpectedBytes 100000000
+
+    if (-not $downloadOk) {
+        Log "CRITICAL: Could not download driver pack after multiple retries." -Color Red
+        Log "Exiting script to preserve progress flags." -Color Red
         exit
     }
 
     # --- Step 5: Extract drivers ---
-    Write-Host "Extracting driver pack..." -ForegroundColor Cyan
+    Log "Extracting driver pack..." -Color Cyan
     if (-not (Test-Path $DriverExtractDir)) { New-Item -Path $DriverExtractDir -ItemType Directory -Force | Out-Null }
 
     if ($DriverPackFilename -match '\.cab$') {
-        expand.exe $DriverPackDownload -F:* $DriverExtractDir | Out-Null
+        Log "Format: CAB archive. Using expand.exe..." -Color DarkGray
+        $expandOut = expand.exe $DriverPackDownload -F:* $DriverExtractDir 2>&1
+        $expandOut | ForEach-Object { Log "  expand: $_" -Color DarkGray -NoConsole }
     } elseif ($DriverPackFilename -match '\.exe$') {
+        Log "Format: EXE self-extractor. Extracting silently..." -Color DarkGray
         Start-Process -FilePath $DriverPackDownload -ArgumentList "/s /e=$DriverExtractDir" -Wait -NoNewWindow
     } else {
-        Write-Host "ERROR: Unknown driver pack format: $DriverPackFilename" -ForegroundColor Red
+        Log "ERROR: Unknown driver pack format: $DriverPackFilename" -Color Red
         exit
     }
 
     # --- Step 6: Install drivers via pnputil ---
-    Write-Host "Installing drivers using pnputil. This may take several minutes..." -ForegroundColor Cyan
     $infFiles = Get-ChildItem -Path $DriverExtractDir -Recurse -Filter "*.inf" -File
     $infCount = $infFiles.Count
-    Write-Host "Found $infCount driver INF files to process." -ForegroundColor DarkCyan
+    Log "Found $infCount driver INF files. Installing via pnputil..." -Color Cyan
 
     $pnpResult = pnputil.exe /add-driver "$DriverExtractDir\*.inf" /subdirs /install 2>&1
-    $pnpResult | ForEach-Object { Write-Host $_ -ForegroundColor Gray }
+    $pnpResult | ForEach-Object { Log "  pnputil: $_" -Color Gray -NoConsole }
+    # Show summary lines on console
+    $pnpResult | Where-Object { $_ -match 'Published|Failed|Total' } | ForEach-Object { Log "  $_" -Color DarkCyan }
 
     # --- Step 7: Cleanup temp files ---
-    Write-Host "`nCleaning up temporary files..." -ForegroundColor DarkCyan
+    Log "Cleaning up temporary files..." -Color DarkCyan
     Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    Write-Host "`nDell driver pack installation completed successfully!" -ForegroundColor Green
-    Write-Host "A reboot is recommended to finalize driver installation." -ForegroundColor Yellow
+    Log "Dell driver pack installation completed successfully!" -Color Green
+    Log "A reboot is recommended to finalize driver installation." -Color Yellow
 }
 
-Write-Host "`n--- UPDATE PROCESS FULLY COMPLETED ---" -ForegroundColor Green
-Write-Host "No further Windows or Dell updates are available." -ForegroundColor Cyan
+# =============================================================================
+# DONE
+# =============================================================================
+Log "" -Color White
+Log "========================================" -Color Green
+Log "UPDATE PROCESS FULLY COMPLETED" -Color Green
+Log "========================================" -Color Green
+Log "No further Windows or Dell updates are available." -Color Cyan
 if (Test-Path $WuFlagPath) { Remove-Item -Path $WuFlagPath -Force | Out-Null }
+Log "Progress flag removed. Script is reset for next full run." -Color DarkGray
