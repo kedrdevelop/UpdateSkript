@@ -19,6 +19,8 @@ param(
 # --- Configuration & Paths ---
 $ScriptDir = Split-Path -Path $OriginalScriptPath
 $WuFlagPath = "$env:PUBLIC\UpdateSkript_WU.flag"
+$DellFlagPath = "$env:PUBLIC\UpdateSkript_Dell.flag"
+$Win11FlagPath = "$env:PUBLIC\UpdateSkript_Win11.flag"
 $LogFile = Join-Path $ScriptDir "UpdatesSkript.log"
 
 # --- Logging Function ---
@@ -153,6 +155,32 @@ Log "========================================" -Color Magenta
 udf_EnsureTls12
 
 # =============================================================================
+# INTERACTIVE RESET MENU
+# =============================================================================
+Log "--------------------------------------------------------" -Color Cyan
+Log "WELCOME TO THE AUTOMATED UPDATE SCRIPT" -Color Green
+Log "" -Color White
+Log "This script keeps track of finished steps using local flags." -Color White
+Log "You may need to start the process OVER (type 'reinstall') if:" -Color Gray
+Log "1. A previous run failed unexpectedly without an error message." -Color Gray
+Log "2. You changed the computer hardware or BIOS settings." -Color Gray
+Log "3. You want to force a new check for updates/drivers even if marked done." -Color Gray
+Log "4. You are testing the script on a new OS deployment." -Color Gray
+Log "" -Color White
+Log "CAUTION: 'reinstall' will delete all progress markers and start over." -Color Yellow
+Log "--------------------------------------------------------" -Color Cyan
+
+$UserInput = Read-Host "Type 'reinstall' to RESET everything, or [Enter] to CONTINUE"
+
+if ($UserInput -eq "reinstall") {
+    Log "RESETTING ALL FLAGS: WU, Dell, and Win11..." -Color Red
+    Remove-Item -Path $WuFlagPath, $DellFlagPath, $Win11FlagPath -Force -ErrorAction SilentlyContinue
+    Log "Flags cleared. Starting fresh." -Color Green
+} else {
+    Log "Resuming from the last completed step (if any)." -Color Cyan
+}
+
+# =============================================================================
 # PHASE 1: WINDOWS UPDATES
 # =============================================================================
 Log "" -Color White
@@ -243,7 +271,11 @@ if (Test-Path $WuFlagPath) {
 Log "" -Color White
 Log "--- DELL DRIVER PACK PHASE ---" -Color Magenta
 
-# --- Step 1: Identify the system ---
+if (Test-Path $DellFlagPath) {
+    Log "Dell Driver updates were already completed previously. Skipping this phase." -Color Green
+    Log "Flag file: $DellFlagPath" -Color DarkGray
+} else {
+    # --- Step 1: Identify the system ---
 $SystemInfo = Get-CimInstance Win32_ComputerSystem
 $SystemModel = $SystemInfo.Model.Trim()
 $SystemManufacturer = $SystemInfo.Manufacturer.Trim()
@@ -448,6 +480,10 @@ if ($SystemManufacturer -notmatch 'Dell') {
 
     Log "Dell driver pack installation completed successfully!" -Color Green
     Log "A reboot is recommended to finalize driver installation." -Color Yellow
+    
+    # Mark phase as completed
+    New-Item -Path $DellFlagPath -ItemType File -Force | Out-Null
+    Log "Dell progress flag created: $DellFlagPath" -Color DarkGray
 }
 
 # =============================================================================
@@ -456,15 +492,22 @@ if ($SystemManufacturer -notmatch 'Dell') {
 Log "" -Color White
 Log "--- WINDOWS 11 25H2 UPGRADE PHASE ---" -Color Magenta
 
-# Check current OS build
-$CurrentBuild = [System.Environment]::OSVersion.Version.Build
-$CurrentVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion
-Log "Current Windows version: $CurrentVersion (Build $CurrentBuild)" -Color DarkCyan
-
-# 25H2 is build 26100+ (same base as 24H2 but with enablement)
-if ($CurrentBuild -ge 26100) {
-    Log "System is already on Windows 11 24H2/25H2 or newer. Skipping upgrade." -Color Green
+if (Test-Path $Win11FlagPath) {
+    Log "Windows 11 25H2 upgrade was already marked as completed. Skipping this phase." -Color Green
+    Log "Flag file: $Win11FlagPath" -Color DarkGray
 } else {
+    # Check current OS build
+    $CurrentBuild = [System.Environment]::OSVersion.Version.Build
+    $CurrentVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion
+    Log "Current Windows version: $CurrentVersion (Build $CurrentBuild)" -Color DarkCyan
+
+    # 25H2 is build 26100+ (same base as 24H2 but with enablement)
+    if ($CurrentBuild -ge 26100) {
+        Log "System is already on Windows 11 24H2/25H2 or newer." -Color Green
+        # Also mark it done so we don't even check build next time
+        New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
+        Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
+    } else {
     # Look for ISO file next to the script
     $IsoFile = Get-ChildItem -Path $ScriptDir -Filter "*.iso" | Where-Object {
         $_.Name -match 'Win11|Windows11|W11|windows_11'
@@ -565,16 +608,13 @@ if ($CurrentBuild -ge 26100) {
                 # Interpret exit codes
                 # https://learn.microsoft.com/en-us/windows/deployment/upgrade/resolution-procedures
                 switch ($setupExitCode) {
-                    0 {
-                        Log "Windows 11 25H2 upgrade completed successfully!" -Color Green
-                        Log "A reboot is required to finalize the upgrade." -Color Yellow
-                        Log "The system will reboot in 30 seconds..." -Color Red
-                        Start-Sleep -Seconds 30
-                        Restart-Computer -Force
-                        exit
-                    }
-                    0x3 {
-                        Log "Upgrade succeeded but a reboot is required." -Color Green
+                    0, 0x3 {
+                        $msg = if ($setupExitCode -eq 0) { "completed successfully!" } else { "succeeded but a reboot is required." }
+                        Log "Windows 11 25H2 upgrade $msg" -Color Green
+                        # Mark phase as completed
+                        New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
+                        Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
+                        
                         Log "The system will reboot in 30 seconds..." -Color Red
                         Start-Sleep -Seconds 30
                         Restart-Computer -Force
@@ -612,6 +652,5 @@ Log "" -Color White
 Log "========================================" -Color Green
 Log "UPDATE PROCESS FULLY COMPLETED" -Color Green
 Log "========================================" -Color Green
-Log "No further Windows or Dell updates are available." -Color Cyan
-if (Test-Path $WuFlagPath) { Remove-Item -Path $WuFlagPath -Force | Out-Null }
-Log "Progress flag removed. Script is reset for next full run." -Color DarkGray
+Log "No further Windows, Dell or OS updates are available." -Color Cyan
+Log "State files are preserved in $env:PUBLIC for future maintenance." -Color DarkGray
