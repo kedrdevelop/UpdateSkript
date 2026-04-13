@@ -74,6 +74,9 @@ namespace UpdateSkriptApp.ViewModels
                 var mdl = await _psService.GetFirstObjectAsync<string>("(Get-CimInstance Win32_ComputerSystem).Model");
                 if (mdl != null) SystemModel = mdl.Trim();
 
+                _engine.SystemModel = SystemModel;
+                _engine.Manufacturer = Manufacturer;
+
                 _logger.Log($"Hardware detected: {Manufacturer} {SystemModel}", "Green");
             }
             catch (Exception ex)

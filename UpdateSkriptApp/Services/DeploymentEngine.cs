@@ -1,3 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
+using System.Xml.Linq;
+
 namespace UpdateSkriptApp.Services
 {
     public class DeploymentEngine
@@ -5,6 +12,10 @@ namespace UpdateSkriptApp.Services
         private readonly ILoggerService _logger;
         private readonly PowerShellService _psService;
         private readonly IDeploymentStateService _stateService;
+        
+        // System Information Properties
+        public string SystemModel { get; set; } = "Unknown";
+        public string Manufacturer { get; set; } = "Unknown";
 
         public DeploymentEngine(ILoggerService logger, PowerShellService psService, IDeploymentStateService stateService)
         {
