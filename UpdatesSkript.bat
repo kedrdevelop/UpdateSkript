@@ -37,12 +37,13 @@ function Log {
     }
 }
 
-# --- Reliable Download Function ---
-# Uses WebClient with retry logic for stable large-file downloads
+# --- Reliable Download Function with Progress Bar ---
+# Uses async WebClient to display real-time download progress
 function Download-File {
     param(
         [string]$Url,
         [string]$Destination,
+        [string]$Label = "Downloading...",
         [int]$MaxRetries = 3,
         [int]$MinExpectedBytes = 0
     )
@@ -52,16 +53,44 @@ function Download-File {
         Log "Download attempt $attempt/$MaxRetries : $Url" -Color DarkCyan
         try {
             $webClient = New-Object System.Net.WebClient
-            $webClient.DownloadFile($Url, $Destination)
+
+            # Track progress via event
+            $progressChanged = $false
+            $downloadedBytes = 0
+            $totalBytes = 0
+
+            $null = Register-ObjectEvent -InputObject $webClient -EventName DownloadProgressChanged -SourceIdentifier WC_Progress -Action {
+                $downloadedBytes = $EventArgs.BytesReceived
+                $totalBytes      = $EventArgs.TotalBytesToReceive
+                $pct             = $EventArgs.ProgressPercentage
+                $dlMB            = [math]::Round($downloadedBytes / 1MB, 1)
+                $totMB           = if ($totalBytes -gt 0) { [math]::Round($totalBytes / 1MB, 1) } else { '?' }
+                Write-Progress -Activity $Event.MessageData -Status "$dlMB MB / $totMB MB" -PercentComplete $(if ($pct -gt 0) { $pct } else { -1 })
+            } -MessageData $Label
+
+            $null = Register-ObjectEvent -InputObject $webClient -EventName DownloadFileCompleted -SourceIdentifier WC_Done -Action {
+                Write-Progress -Activity $Event.MessageData -Completed
+            } -MessageData $Label
+
+            $webClient.DownloadFileAsync([Uri]$Url, $Destination)
+
+            # Wait until download is complete
+            while ($webClient.IsBusy) { Start-Sleep -Milliseconds 300 }
+
+            Unregister-Event -SourceIdentifier WC_Progress -ErrorAction SilentlyContinue
+            Unregister-Event -SourceIdentifier WC_Done    -ErrorAction SilentlyContinue
+            Remove-Job -Name WC_Progress -ErrorAction SilentlyContinue
+            Remove-Job -Name WC_Done    -ErrorAction SilentlyContinue
             $webClient.Dispose()
+            Write-Progress -Activity $Label -Completed
 
             if (Test-Path $Destination) {
-                $fileSize = (Get-Item $Destination).Length
+                $fileSize   = (Get-Item $Destination).Length
                 $fileSizeMB = [math]::Round($fileSize / 1MB, 2)
                 Log "Downloaded $fileSizeMB MB ($fileSize bytes) -> $Destination" -Color Green
 
                 if ($MinExpectedBytes -gt 0 -and $fileSize -lt $MinExpectedBytes) {
-                    Log "WARNING: File is smaller than expected minimum ($MinExpectedBytes bytes). Retrying..." -Color Yellow
+                    Log "WARNING: File is smaller than expected ($MinExpectedBytes bytes). Retrying..." -Color Yellow
                     Remove-Item -Path $Destination -Force -ErrorAction SilentlyContinue
                     Start-Sleep -Seconds 5
                     continue
@@ -72,11 +101,34 @@ function Download-File {
             }
         } catch {
             Log "ERROR on attempt $attempt : $($_.Exception.Message)" -Color Red
+            Unregister-Event -SourceIdentifier WC_Progress -ErrorAction SilentlyContinue
+            Unregister-Event -SourceIdentifier WC_Done    -ErrorAction SilentlyContinue
         }
         Start-Sleep -Seconds 5
     }
     Log "FAILED: Could not download after $MaxRetries attempts: $Url" -Color Red
     return $false
+}
+
+# --- Animated Spinner for operations without measurable progress ---
+function Show-Spinner {
+    param(
+        [string]$Activity,
+        [string]$Status,
+        [scriptblock]$Block
+    )
+    $job = Start-Job -ScriptBlock $Block
+    $spinner = @('|','/','-','\')
+    $i = 0
+    while ($job.State -eq 'Running') {
+        Write-Progress -Activity $Activity -Status "$($spinner[$i % 4])  $Status" -PercentComplete -1
+        Start-Sleep -Milliseconds 250
+        $i++
+    }
+    Write-Progress -Activity $Activity -Completed
+    $result = Receive-Job -Job $job
+    Remove-Job -Job $job
+    return $result
 }
 
 # --- TLS Configuration ---
@@ -205,7 +257,7 @@ if ($SystemManufacturer -notmatch 'Dell') {
     Log "Temp directory: $TempDir" -Color DarkGray
 
     Log "Downloading Dell Driver Pack Catalog (~300 KB compressed)..." -Color Cyan
-    $downloadOk = Download-File -Url $CatalogUrl -Destination $CabPath -MaxRetries 3
+    $downloadOk = Download-File -Url $CatalogUrl -Destination $CabPath -MaxRetries 3 -Label "Downloading Dell catalog..."
 
     if (-not $downloadOk) {
         Log "CRITICAL: Could not download Dell catalog after multiple retries." -Color Red
@@ -311,9 +363,10 @@ if ($SystemManufacturer -notmatch 'Dell') {
     Log "URL: $DriverPackUrl" -Color DarkGray
 
     # --- Step 4: Download driver pack ---
-    Log "Downloading driver pack. This may take several minutes..." -Color Cyan
-    # MinExpectedBytes = 100 MB - driver packs are always large
-    $downloadOk = Download-File -Url $DriverPackUrl -Destination $DriverPackDownload -MaxRetries 3 -MinExpectedBytes 100000000
+    $packSizeMB = [math]::Round([long]$DriverPack.size / 1MB, 0)
+    Log "Downloading driver pack (~$packSizeMB MB). This may take several minutes..." -Color Cyan
+    $downloadOk = Download-File -Url $DriverPackUrl -Destination $DriverPackDownload -MaxRetries 3 `
+        -MinExpectedBytes 100000000 -Label "Downloading Dell driver pack ($packSizeMB MB)..."
 
     if (-not $downloadOk) {
         Log "CRITICAL: Could not download driver pack after multiple retries." -Color Red
@@ -327,25 +380,48 @@ if ($SystemManufacturer -notmatch 'Dell') {
 
     if ($DriverPackFilename -match '\.cab$') {
         Log "Format: CAB archive. Using expand.exe..." -Color DarkGray
-        $expandOut = expand.exe $DriverPackDownload -F:* $DriverExtractDir 2>&1
+        $expandOut = Show-Spinner -Activity "Extracting CAB driver pack..." -Status "Please wait, unpacking files..." -Block {
+            expand.exe $using:DriverPackDownload -F:* $using:DriverExtractDir 2>&1
+        }
         $expandOut | ForEach-Object { Log "  expand: $_" -Color DarkGray -NoConsole }
     } elseif ($DriverPackFilename -match '\.exe$') {
-        Log "Format: EXE self-extractor. Extracting silently..." -Color DarkGray
-        Start-Process -FilePath $DriverPackDownload -ArgumentList "/s /e=$DriverExtractDir" -Wait -NoNewWindow
+        Log "Format: EXE self-extractor. Extracting..." -Color DarkGray
+        Show-Spinner -Activity "Extracting EXE driver pack..." -Status "Please wait, this may take a few minutes..." -Block {
+            Start-Process -FilePath $using:DriverPackDownload -ArgumentList "/s /e=$using:DriverExtractDir" -Wait -NoNewWindow
+        } | Out-Null
     } else {
         Log "ERROR: Unknown driver pack format: $DriverPackFilename" -Color Red
         exit
     }
+    Log "Extraction complete." -Color Green
 
-    # --- Step 6: Install drivers via pnputil ---
+    # --- Step 6: Install drivers via pnputil (one by one with progress) ---
     $infFiles = Get-ChildItem -Path $DriverExtractDir -Recurse -Filter "*.inf" -File
     $infCount = $infFiles.Count
-    Log "Found $infCount driver INF files. Installing via pnputil..." -Color Cyan
+    Log "Found $infCount driver INF files. Installing..." -Color Cyan
 
-    $pnpResult = pnputil.exe /add-driver "$DriverExtractDir\*.inf" /subdirs /install 2>&1
-    $pnpResult | ForEach-Object { Log "  pnputil: $_" -Color Gray -NoConsole }
-    # Show summary lines on console
-    $pnpResult | Where-Object { $_ -match 'Published|Failed|Total' } | ForEach-Object { Log "  $_" -Color DarkCyan }
+    $installed = 0
+    $failed    = 0
+    $current   = 0
+    foreach ($inf in $infFiles) {
+        $current++
+        $pct         = [math]::Round(($current / $infCount) * 100)
+        $driverName  = $inf.Directory.Name + '\' + $inf.Name
+        Write-Progress -Activity "Installing Dell drivers ($current / $infCount)" `
+                       -Status $driverName `
+                       -PercentComplete $pct
+        $out = pnputil.exe /add-driver $inf.FullName /install 2>&1
+        Log "  [$current/$infCount] $driverName" -Color DarkGray -NoConsole
+        if ($out -match 'Published|successfully') {
+            $installed++
+            Log "    OK: $driverName" -Color DarkGray -NoConsole
+        } elseif ($out -match 'Failed|Error') {
+            $failed++
+            Log "    FAIL: $driverName" -Color DarkGray -NoConsole
+        }
+    }
+    Write-Progress -Activity "Installing Dell drivers" -Completed
+    Log "Driver installation complete: $installed installed, $failed failed out of $infCount total." -Color Green
 
     # --- Step 7: Cleanup temp files ---
     Log "Cleaning up temporary files..." -Color DarkCyan
