@@ -432,6 +432,119 @@ if ($SystemManufacturer -notmatch 'Dell') {
 }
 
 # =============================================================================
+# PHASE 3: WINDOWS 11 25H2 UPGRADE VIA ISO
+# =============================================================================
+Log "" -Color White
+Log "--- WINDOWS 11 25H2 UPGRADE PHASE ---" -Color Magenta
+
+# Check current OS build
+$CurrentBuild = [System.Environment]::OSVersion.Version.Build
+$CurrentVersion = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").DisplayVersion
+Log "Current Windows version: $CurrentVersion (Build $CurrentBuild)" -Color DarkCyan
+
+# 25H2 is build 26100+ (same base as 24H2 but with enablement)
+if ($CurrentBuild -ge 26100) {
+    Log "System is already on Windows 11 24H2/25H2 or newer. Skipping upgrade." -Color Green
+} else {
+    # Look for ISO file next to the script
+    $IsoFile = Get-ChildItem -Path $ScriptDir -Filter "*.iso" | Where-Object {
+        $_.Name -match 'Win11|Windows11|W11|windows_11'
+    } | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+
+    if (-not $IsoFile) {
+        # Try any ISO in the directory
+        $IsoFile = Get-ChildItem -Path $ScriptDir -Filter "*.iso" | Select-Object -First 1
+    }
+
+    if (-not $IsoFile) {
+        Log "WARNING: No Windows 11 ISO file found next to the script." -Color Yellow
+        Log "Please place a Windows 11 25H2 ISO file in: $ScriptDir" -Color Yellow
+        Log "You can download it from: https://www.microsoft.com/software-download/windows11" -Color Cyan
+        Log "Skipping upgrade phase." -Color Yellow
+    } else {
+        Log "Found ISO file: $($IsoFile.Name) ($([math]::Round($IsoFile.Length / 1GB, 2)) GB)" -Color Cyan
+
+        # Mount the ISO
+        Log "Mounting ISO image..." -Color Cyan
+        try {
+            $MountResult = Mount-DiskImage -ImagePath $IsoFile.FullName -PassThru -ErrorAction Stop
+            $DriveLetter = ($MountResult | Get-Volume).DriveLetter
+            Log "ISO mounted as drive $($DriveLetter):" -Color Green
+        } catch {
+            Log "ERROR: Failed to mount ISO: $($_.Exception.Message)" -Color Red
+            Log "Skipping upgrade phase." -Color Yellow
+            $DriveLetter = $null
+        }
+
+        if ($DriveLetter) {
+            $SetupPath = "$($DriveLetter):\setup.exe"
+
+            if (-not (Test-Path $SetupPath)) {
+                Log "ERROR: setup.exe not found on the mounted ISO at $SetupPath" -Color Red
+                Dismount-DiskImage -ImagePath $IsoFile.FullName -ErrorAction SilentlyContinue
+            } else {
+                Log "Starting Windows 11 25H2 in-place upgrade..." -Color Cyan
+                Log "This process will take 20-60 minutes. The screen may go black during installation." -Color Yellow
+                Log "DO NOT turn off the computer!" -Color Red
+                Log "" -Color White
+                Log "Command: $SetupPath /auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning" -Color DarkGray
+
+                # Run the upgrade
+                $setupArgs = "/auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning"
+
+                $setupProcess = Start-Process -FilePath $SetupPath -ArgumentList $setupArgs -Wait -PassThru -NoNewWindow
+
+                $setupExitCode = $setupProcess.ExitCode
+                Log "Windows Setup finished with exit code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Cyan
+
+                # Dismount the ISO
+                Log "Dismounting ISO..." -Color DarkCyan
+                Dismount-DiskImage -ImagePath $IsoFile.FullName -ErrorAction SilentlyContinue
+
+                # Interpret exit codes
+                # https://learn.microsoft.com/en-us/windows/deployment/upgrade/resolution-procedures
+                switch ($setupExitCode) {
+                    0 {
+                        Log "Windows 11 25H2 upgrade completed successfully!" -Color Green
+                        Log "A reboot is required to finalize the upgrade." -Color Yellow
+                        Log "The system will reboot in 30 seconds..." -Color Red
+                        Start-Sleep -Seconds 30
+                        Restart-Computer -Force
+                        exit
+                    }
+                    0x3 {
+                        Log "Upgrade succeeded but a reboot is required." -Color Green
+                        Log "The system will reboot in 30 seconds..." -Color Red
+                        Start-Sleep -Seconds 30
+                        Restart-Computer -Force
+                        exit
+                    }
+                    0xC1900210 {
+                        Log "Compatibility check passed. No issues found (but upgrade may not have started)." -Color Yellow
+                    }
+                    0xC1900208 {
+                        Log "Compatibility issues detected. Check the compatibility report." -Color Yellow
+                        Log "Report: C:\`$WINDOWS.~BT\Sources\Panther\compat*.xml" -Color DarkGray
+                    }
+                    0xC1900204 {
+                        Log "The selected migration choice is not available." -Color Yellow
+                    }
+                    default {
+                        if ($setupExitCode -eq -1) {
+                            Log "Setup process was terminated or did not return a valid exit code." -Color Yellow
+                        } else {
+                            Log "Upgrade finished with unexpected code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Yellow
+                        }
+                        Log "Check upgrade logs at: C:\`$WINDOWS.~BT\Sources\Panther\setupact.log" -Color DarkGray
+                        Log "Also check: C:\`$WINDOWS.~BT\Sources\Panther\setuperr.log" -Color DarkGray
+                    }
+                }
+            }
+        }
+    }
+}
+
+# =============================================================================
 # DONE
 # =============================================================================
 Log "" -Color White
