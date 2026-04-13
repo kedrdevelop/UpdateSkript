@@ -163,16 +163,20 @@ if (Test-Path $WuFlagPath) {
     Log "Flag file: $WuFlagPath" -Color DarkGray
 } else {
     Log "Preparing NuGet provider..." -Color Cyan
+    Write-Progress -Activity "Phase 1: Windows Updates" -Status "Installing NuGet provider..." -PercentComplete 5
     Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
 
     Log "Loading PSWindowsUpdate module..." -Color Cyan
+    Write-Progress -Activity "Phase 1: Windows Updates" -Status "Installing PSWindowsUpdate module..." -PercentComplete 15
     Install-Module -Name PSWindowsUpdate -Force -AllowClobber -SkipPublisherCheck -ErrorAction SilentlyContinue
     Import-Module PSWindowsUpdate
 
-    Log "Scanning for Windows updates..." -Color Cyan
+    Log "Scanning for Windows updates (this may take a minute)..." -Color Cyan
+    Write-Progress -Activity "Phase 1: Windows Updates" -Status "Scanning Windows Update server..." -PercentComplete 25
 
     # Get available updates, filter out known looping updates
     $pendingUpdates = Get-WindowsUpdate
+    Write-Progress -Activity "Phase 1: Windows Updates" -Status "Filtering results..." -PercentComplete 40
     $pendingCount = @($pendingUpdates).Count
     Log "Found $pendingCount total updates in pre-search." -Color DarkCyan
 
@@ -188,8 +192,16 @@ if (Test-Path $WuFlagPath) {
 
     $Result = @()
     if ($filteredUpdates) {
+        $wuCurrent = 0
+        $wuTotal = @($filteredUpdates).Count
         foreach ($update in $filteredUpdates) {
-            Log "Installing: $($update.Title)..." -Color Cyan
+            $wuCurrent++
+            $wuPct = [math]::Round(50 + ($wuCurrent / $wuTotal) * 50)
+            $wuName = if ($update.KB) { "KB$($update.KB)" } else { $update.Title.Substring(0, [Math]::Min(60, $update.Title.Length)) }
+            Write-Progress -Activity "Phase 1: Windows Updates ($wuCurrent / $wuTotal)" `
+                           -Status "Installing: $wuName" `
+                           -PercentComplete $wuPct
+            Log "Installing [$wuCurrent/$wuTotal]: $($update.Title)..." -Color Cyan
             if ($update.KB) {
                 Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
                 if ($tempRes) { $Result += $tempRes }
@@ -198,6 +210,7 @@ if (Test-Path $WuFlagPath) {
                 if ($tempRes) { $Result += $tempRes }
             }
         }
+        Write-Progress -Activity "Phase 1: Windows Updates" -Completed
     }
 
     $updatesInstalled = $false
@@ -285,8 +298,10 @@ if ($SystemManufacturer -notmatch 'Dell') {
     Log "Catalog XML extracted successfully. Size: $XmlSizeMB MB" -Color Green
 
     # --- Step 3: Find matching driver pack ---
-    Log "Parsing catalog for model: $SystemModel" -Color Cyan
+    Log "Parsing catalog XML (~3 MB). This may take a few seconds..." -Color Cyan
+    Write-Progress -Activity "Phase 2: Dell Drivers" -Status "Loading catalog XML..." -PercentComplete 30
     [xml]$Catalog = Get-Content $XmlPath
+    Write-Progress -Activity "Phase 2: Dell Drivers" -Status "Catalog loaded. Searching for model..." -PercentComplete 40
 
     # Map OS build to Dell osCode values
     $OSBuild = [System.Environment]::OSVersion.Version.Build
@@ -298,6 +313,9 @@ if ($SystemManufacturer -notmatch 'Dell') {
         $OsCodeTargets = @('Windows10')
     }
     Log "Target OS: $OSTarget (Build $OSBuild), checking osCodes: $($OsCodeTargets -join ', ')" -Color DarkCyan
+
+    Log "Searching catalog for model: $SystemModel ..." -Color Cyan
+    Write-Progress -Activity "Phase 2: Dell Drivers" -Status "Searching for '$SystemModel' in catalog..." -PercentComplete 50
 
     $MatchingPacks = $Catalog.DriverPackManifest.DriverPackage | Where-Object {
         $modelMatch = $false
@@ -320,6 +338,7 @@ if ($SystemManufacturer -notmatch 'Dell') {
         }
         $modelMatch -and $osMatch -and $_.type -ne 'WinPE'
     }
+    Write-Progress -Activity "Phase 2: Dell Drivers" -Status "Search complete." -PercentComplete 60
 
     if (-not $MatchingPacks) {
         Log "No exact match found. Trying broader search..." -Color Yellow
@@ -489,13 +508,55 @@ if ($CurrentBuild -ge 26100) {
                 Log "" -Color White
                 Log "Command: $SetupPath /auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning" -Color DarkGray
 
-                # Run the upgrade
+                # Run the upgrade with live progress monitoring
                 $setupArgs = "/auto upgrade /quiet /noreboot /DynamicUpdate disable /eula accept /compat ignorewarning"
 
-                $setupProcess = Start-Process -FilePath $SetupPath -ArgumentList $setupArgs -Wait -PassThru -NoNewWindow
+                $setupProcess = Start-Process -FilePath $SetupPath -ArgumentList $setupArgs -PassThru -NoNewWindow
+
+                # Monitor setup progress via log file
+                $setupLog = "C:\`$WINDOWS.~BT\Sources\Panther\setupact.log"
+                $phases = @(
+                    @{ Pattern = 'Initializing';          Pct = 5;   Label = 'Initializing...' },
+                    @{ Pattern = 'PreDownload';            Pct = 10;  Label = 'Preparing for download...' },
+                    @{ Pattern = 'PreInstall';             Pct = 20;  Label = 'Preparing for installation...' },
+                    @{ Pattern = 'Install';                Pct = 30;  Label = 'Installing Windows 11 25H2...' },
+                    @{ Pattern = 'Finalize';               Pct = 60;  Label = 'Finalizing installation...' },
+                    @{ Pattern = 'Post\s*Install';         Pct = 80;  Label = 'Post-installation cleanup...' },
+                    @{ Pattern = 'Success|complete';       Pct = 95;  Label = 'Almost done...' }
+                )
+                $lastPct = 1
+                $lastLabel = 'Starting Windows Setup...'
+                $elapsed = [System.Diagnostics.Stopwatch]::StartNew()
+
+                while (-not $setupProcess.HasExited) {
+                    $elapsedMin = [math]::Round($elapsed.Elapsed.TotalMinutes, 1)
+
+                    # Try to read the latest phase from Setup log
+                    if (Test-Path $setupLog) {
+                        try {
+                            $tail = Get-Content $setupLog -Tail 30 -ErrorAction SilentlyContinue
+                            foreach ($phase in $phases) {
+                                if ($tail -match $phase.Pattern) {
+                                    if ($phase.Pct -gt $lastPct) {
+                                        $lastPct   = $phase.Pct
+                                        $lastLabel = $phase.Label
+                                    }
+                                }
+                            }
+                        } catch { }
+                    }
+
+                    Write-Progress -Activity "Phase 3: Windows 11 25H2 Upgrade ($elapsedMin min)" `
+                                   -Status $lastLabel `
+                                   -PercentComplete $lastPct
+                    Start-Sleep -Seconds 5
+                }
+                $elapsed.Stop()
+                Write-Progress -Activity "Phase 3: Windows 11 25H2 Upgrade" -Completed
+                $totalMin = [math]::Round($elapsed.Elapsed.TotalMinutes, 1)
 
                 $setupExitCode = $setupProcess.ExitCode
-                Log "Windows Setup finished with exit code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Cyan
+                Log "Windows Setup finished in $totalMin minutes. Exit code: $setupExitCode (0x$($setupExitCode.ToString('X')))" -Color Cyan
 
                 # Dismount the ISO
                 Log "Dismounting ISO..." -Color DarkCyan
