@@ -37,30 +37,40 @@ namespace UpdateSkriptApp.ViewModels
             _logger = new Services.FileLoggerService();
             _logger.OnLogLineReceived += (msg, color) => 
             {
-                // Ensure UI update on the correct thread
-                System.Windows.Application.Current.Dispatcher.Invoke(() => 
+                // Safety check for Application and Dispatcher
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher != null)
                 {
-                    LogOutput += msg + "\n";
-                });
+                    dispatcher.InvokeAsync(() => 
+                    {
+                        LogOutput += msg + Environment.NewLine;
+                    });
+                }
             };
             
-            _logger.Log("Application initialized. Architecture: Senior MVVM.");
+            // Move initial logging to a background task to avoid blocking constructor
+            Task.Run(() => _logger.Log("Application initialized. Architecture: Senior MVVM."));
             
             _psService = new Services.PowerShellService();
             _psService.OnOutputReceived += (msg, color) => _logger.Log(msg, color);
             _psService.OnProgressChanged += (pct, status) => 
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(() => 
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher != null)
                 {
-                    ProgressPercentage = pct;
-                    if (!string.IsNullOrEmpty(status)) CurrentAction = status;
-                });
+                    dispatcher.InvokeAsync(() => 
+                    {
+                        ProgressPercentage = pct;
+                        if (!string.IsNullOrEmpty(status)) CurrentAction = status;
+                    });
+                }
             };
 
             _stateService = new Services.DeploymentStateService();
             _engine = new Services.DeploymentEngine(_logger, _psService, _stateService);
 
-            _ = InitializeAsync();
+            // Execute hardware detection after constructor finishes
+            System.Windows.Application.Current.Dispatcher.BeginInvoke(new Action(async () => await InitializeAsync()));
         }
 
         private async Task InitializeAsync()

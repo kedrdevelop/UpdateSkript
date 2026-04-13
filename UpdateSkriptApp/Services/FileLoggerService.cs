@@ -9,10 +9,19 @@ namespace UpdateSkriptApp.Services
 
         public FileLoggerService(string? logDirectory = null)
         {
-            logDirectory ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
-            if (!Directory.Exists(logDirectory)) Directory.CreateDirectory(logDirectory);
-            
-            _logFilePath = Path.Combine(logDirectory, "UpdateSkript_GUI.log");
+            try
+            {
+                logDirectory ??= Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+                if (!Directory.Exists(logDirectory)) Directory.CreateDirectory(logDirectory);
+                _logFilePath = Path.Combine(logDirectory, "UpdateSkript_GUI.log");
+            }
+            catch
+            {
+                // Fallback to Public folder if app dir is read-only
+                var fallback = @"C:\Users\Public\UpdateSkript\Logs";
+                if (!Directory.Exists(fallback)) Directory.CreateDirectory(fallback);
+                _logFilePath = Path.Combine(fallback, "UpdateSkript_GUI.log");
+            }
         }
 
         public void Log(string message, string color = "White")
