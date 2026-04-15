@@ -220,24 +220,36 @@ if (Test-Path $WuFlagPath) {
 
     $Result = @()
     if ($filteredUpdates) {
-        $wuCurrent = 0
-        $wuTotal = @($filteredUpdates).Count
-        foreach ($update in $filteredUpdates) {
-            $wuCurrent++
-            $wuPct = [math]::Round(50 + ($wuCurrent / $wuTotal) * 50)
-            $wuName = if ($update.KB) { "KB$($update.KB)" } else { $update.Title.Substring(0, [Math]::Min(60, $update.Title.Length)) }
-            Write-Progress -Activity "Phase 1: Windows Updates ($wuCurrent / $wuTotal)" `
-                           -Status "Installing: $wuName" `
-                           -PercentComplete $wuPct
-            Log "Installing [$wuCurrent/$wuTotal]: $($update.Title)..." -Color Cyan
-            if ($update.KB) {
-                Install-WindowsUpdate -KBArticleID $update.KB -AcceptAll -Install -Verbose -OutVariable tempRes
-                if ($tempRes) { $Result += $tempRes }
-            } else {
-                Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -Verbose -OutVariable tempRes
-                if ($tempRes) { $Result += $tempRes }
+        # --- Batch install: all updates with a KB number in one call ---
+        # This prevents WUA cache drift that occurs when installing one-by-one in a loop,
+        # which caused some updates (e.g. .NET, Intel drivers) to be silently skipped.
+        $kbUpdates  = @($filteredUpdates | Where-Object { $_.KB })
+        $noKbUpdates = @($filteredUpdates | Where-Object { -not $_.KB })
+
+        if ($kbUpdates) {
+            $kbList = $kbUpdates | ForEach-Object { $_.KB }
+            Log "Installing $($kbUpdates.Count) KB-based update(s) in a single batch call: $($kbList -join ', ')" -Color Cyan
+            Write-Progress -Activity "Phase 1: Windows Updates" -Status "Installing KB batch ($($kbUpdates.Count) updates)..." -PercentComplete 55
+            Install-WindowsUpdate -KBArticleID $kbList -AcceptAll -Install -AutoReboot:$false -OutVariable tempRes
+            if ($tempRes) { $Result += $tempRes }
+        }
+
+        if ($noKbUpdates) {
+            $wuCurrent = 0
+            $wuTotal   = $noKbUpdates.Count
+            Log "Installing $wuTotal KB-less update(s) individually (e.g. Intel/OEM drivers)..." -Color Cyan
+            foreach ($update in $noKbUpdates) {
+                $wuCurrent++
+                $wuName = $update.Title.Substring(0, [Math]::Min(60, $update.Title.Length))
+                Write-Progress -Activity "Phase 1: Windows Updates - Drivers ($wuCurrent / $wuTotal)" `
+                               -Status "Installing: $wuName" `
+                               -PercentComplete ([math]::Round(70 + ($wuCurrent / $wuTotal) * 25))
+                Log "  [$wuCurrent/$wuTotal] $($update.Title)" -Color Cyan
+                Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -AutoReboot:$false -OutVariable tempRes2
+                if ($tempRes2) { $Result += $tempRes2 }
             }
         }
+
         Write-Progress -Activity "Phase 1: Windows Updates" -Completed
     }
 
@@ -667,23 +679,66 @@ del /f /q "$env:PUBLIC\UpdateSkript_*.flag" >nul 2>&1
                 Write-Progress -Activity "Phase 3: Windows 11 Upgrade" -Completed
                 $totalMin = [math]::Round($elapsed.Elapsed.TotalMinutes, 1)
 
-                # Robust Exit Code capture
+                # --- Reliable success detection via setupact.log ---
+                # setup.exe spawns child processes and exits early — its exit code is ALWAYS null/Unknown.
+                # We must determine the real outcome by reading the setup log for the final result marker.
                 $setupExitCode = $setupProcess.ExitCode
-                $hexExitCode = if ($null -ne $setupExitCode) { "0x{0:X8}" -f $setupExitCode } else { "Unknown" }
-                Log "Windows Setup finished in $totalMin minutes. Exit code: $setupExitCode ($hexExitCode)" -Color Cyan
+                $hexExitCode = if ($null -ne $setupExitCode -and $setupExitCode -ne -1 -and $setupExitCode -ne 0) { "0x{0:X8}" -f $setupExitCode } else { $setupExitCode }
+                Log "Windows Setup finished in $totalMin minutes. Raw exit code: $setupExitCode ($hexExitCode)" -Color Cyan
+
+                # Read last 200 lines of setupact.log to detect success or failure
+                $upgradeSucceeded = $false
+                $upgradeError     = $null
+                try {
+                    $logTail = Get-Content $setupLog -Tail 200 -ErrorAction SilentlyContinue
+                    if ($logTail -match 'Finalize succeeded|Upgrade completed successfully|Operation completed successfully') {
+                        $upgradeSucceeded = $true
+                        Log "SUCCESS marker found in setupact.log -> upgrade completed." -Color Green
+                    } elseif ($logTail -match 'Rollback|upgrade failed|fatal error|FATAL_ERROR') {
+                        $upgradeError = "Rollback or fatal error detected in setupact.log"
+                    }
+                } catch {
+                    Log "WARNING: Could not read setupact.log to verify result." -Color Yellow
+                }
+
+                # Fallback: if no marker found, check if the upgrade staging folder is gone (Setup cleaned up = success)
+                if (-not $upgradeSucceeded -and -not $upgradeError) {
+                    $stagingDir = "C:\`$WINDOWS.~BT"
+                    if (-not (Test-Path $stagingDir)) {
+                        Log "Staging folder gone — treating as successful upgrade." -Color Green
+                        $upgradeSucceeded = $true
+                    } else {
+                        Log "WARNING: Could not confirm upgrade success from log markers." -Color Yellow
+                        Log "The setup process may still be running in the background." -Color Yellow
+                        Log "Check: $setupLog" -Color DarkGray
+                    }
+                }
 
                 # Dismount the ISO
                 Log "Dismounting ISO..." -Color DarkCyan
                 Dismount-DiskImage -ImagePath $IsoFile.FullName -ErrorAction SilentlyContinue
 
-                # Interpret exit codes
-                # https://learn.microsoft.com/en-us/windows/deployment/upgrade/resolution-procedures
-                switch ($setupExitCode) {
+                if ($upgradeError) {
+                    Log "UPGRADE FAILED: $upgradeError" -Color Red
+                    Log "Check upgrade logs at: C:\`$WINDOWS.~BT\Sources\Panther\setupact.log" -Color DarkGray
+                    Log "Also check: C:\`$WINDOWS.~BT\Sources\Panther\setuperr.log" -Color DarkGray
+                } elseif ($upgradeSucceeded) {
+                    New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
+                    Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
+                    Log "Waiting 30 seconds for SetupComplete.cmd to fire (Sysprep will shut down automatically)..." -Color Yellow
+                    Log "DO NOT manually reboot — let Sysprep shut down the machine cleanly." -Color Red
+                    Start-Sleep -Seconds 30
+                    # SetupComplete.cmd runs sysprep /shutdown — if we are still alive, trigger reboot manually
+                    Restart-Computer -Force
+                    exit
+                } else {
+                    # Could not determine outcome — interpret by legacy exit code as fallback
+                    switch ($setupExitCode) {
                     0 {
-                        Log "Windows 11 25H2 upgrade completed successfully!" -Color Green
+                        Log "Exit code 0 — treating as success." -Color Green
                         New-Item -Path $Win11FlagPath -ItemType File -Force | Out-Null
                         Log "Win11 progress flag created: $Win11FlagPath" -Color DarkGray
-                        Log "The system will reboot in 30 seconds..." -Color Red
+                        Log "Waiting 30 seconds for SetupComplete.cmd / Sysprep..." -Color Yellow
                         Start-Sleep -Seconds 30
                         Restart-Computer -Force
                         exit
