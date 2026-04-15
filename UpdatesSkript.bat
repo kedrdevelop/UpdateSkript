@@ -584,10 +584,16 @@ net user defaultuser0 /delete >nul 2>&1
 rd /s /q "C:\Users\defaultuser0" >nul 2>&1
 
 :: 3. Clean deployment flags
-del /f /q "$env:PUBLIC\UpdateSkript_*.flag" >nul 2>&1
+:: Note: %PUBLIC% is used here (CMD batch syntax), NOT `$env:PUBLIC` (PowerShell syntax)
+del /f /q "%PUBLIC%\UpdateSkript_*.flag" >nul 2>&1
 
-:: 4. Trigger Sysprep and Shutdown
-%WINDIR%\system32\sysprep\sysprep.exe /oobe /generalize /shutdown /quiet
+:: 4. Disable Reserved Storage — required for Sysprep to work on Windows 11 post-upgrade
+::    Without this, Sysprep fails silently with hr=0x800F0975
+DISM.exe /Online /Set-ReservedStorageState /State:Disabled >nul 2>&1
+
+:: 5. Trigger Sysprep and Shutdown
+::    /quiet is intentionally removed so failures are visible and not silently swallowed
+%WINDIR%\system32\sysprep\sysprep.exe /oobe /generalize /shutdown
 "@
                 Set-Content -Path $SetupCompletePath -Value $SetupCompleteContent -Encoding Ascii
                 Log "  -> SetupComplete.cmd created. The PC will automatically Sysprep & shutdown after upgrade." -Color Green
