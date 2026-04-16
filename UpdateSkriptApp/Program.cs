@@ -19,6 +19,7 @@ class Program
         services.AddSingleton<IRegistryWrapper, RealRegistryWrapper>();
         services.AddSingleton<IAppEnvironment, RealAppEnvironment>();
         services.AddSingleton<ILogger, AppLogger>();
+        services.AddSingleton<IUpdateHistoryTracker, UpdateHistoryTracker>();
         services.AddTransient<IPowerShellRunner, PowerShellHost>();
 
         services.AddTransient<IRegistryService, RegistryService>();

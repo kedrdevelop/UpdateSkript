@@ -1,7 +1,9 @@
 using System;
+using System.Text.Json;
 using System.Threading.Tasks;
-using Spectre.Console;
 using UpdateSkriptApp.Services;
+using Spectre.Console;
+using System.IO;
 
 namespace UpdateSkriptApp.Modules;
 
@@ -13,83 +15,152 @@ public interface IWinUpdateProvider
 public class WinUpdateProvider : IWinUpdateProvider
 {
     private readonly IPowerShellRunner _powerShell;
+    private readonly IUpdateHistoryTracker _history;
+    private readonly IFileSystem _fs;
+    private readonly IAppEnvironment _env;
 
-    public WinUpdateProvider(IPowerShellRunner powerShell)
+    public WinUpdateProvider(IPowerShellRunner powerShell, IUpdateHistoryTracker history, IFileSystem fs, IAppEnvironment env)
     {
         _powerShell = powerShell;
+        _history = history;
+        _fs = fs;
+        _env = env;
     }
 
     public async Task<bool> RunWindowsUpdatesAsync()
     {
-        string script = @"
-[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-Write-Output ""Enabling TLS 1.2 support...""
+        string tmpJsonFile = Path.Combine(_env.TempDirectory, $"wu_{Guid.NewGuid():N}.json");
 
-Write-Output ""Preparing NuGet provider...""
+        string initScript = $@"
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+Write-Output 'Enabling TLS 1.2 support...'
+
+Write-Output 'Preparing NuGet provider...'
 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
 
-Write-Output ""Loading PSWindowsUpdate module...""
+Write-Output 'Loading PSWindowsUpdate module...'
 Install-Module -Name PSWindowsUpdate -Force -AllowClobber -Confirm:$false -SkipPublisherCheck -ErrorAction SilentlyContinue
 Import-Module PSWindowsUpdate
 
-Write-Output ""Scanning for Windows updates (this may take a minute)...""
-$updates = Get-WindowsUpdate
+Write-Output 'Scanning for Windows updates (this may take a minute)...'
+$updates = @(Get-WindowsUpdate)
 
-Write-Output ""Filtering results...""
-$filtered = $updates | Where-Object { $_.Title -notmatch 'Security Intelligence Update|Malicious Software Removal Tool|Antimalware Platform|Security platform' }
-
-$kbUpdates = @($filtered | Where-Object { $_.KB })
-$noKbUpdates = @($filtered | Where-Object { -not $_.KB })
-$installedCount = 0
-
-Write-Output ""Found $(@($updates).Count) total updates. $(@($filtered).Count) eligible for installation after filtering.""
-
-if ($kbUpdates) {
-    $kbList = $kbUpdates | ForEach-Object { $_.KB }
-    Write-Output ""Installing $($kbList.Count) KB updates in batch...""
-    $res = Install-WindowsUpdate -KBArticleID $kbList -AcceptAll -Confirm:$false -Install -AutoReboot:$false
-    $installedCount += @($res | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
-}
-
-if ($noKbUpdates) {
-    Write-Output ""Installing $($noKbUpdates.Count) non-KB updates...""
-    foreach ($update in $noKbUpdates) {
-        Write-Output ""Installing $($update.Title)...""
-        $res2 = Install-WindowsUpdate -Title $update.Title -AcceptAll -Confirm:$false -Install -AutoReboot:$false
-        $installedCount += @($res2 | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
-    }
-}
-Write-Output ""INSTALLCOUNT=$installedCount""
+if ($updates.Count -gt 0) {{
+    $mapped = $updates | Select-Object Title, @{{Name='KB';Expression={{$_.KB}}}}
+    $mapped | ConvertTo-Json -Compress | Out-File -FilePath '{tmpJsonFile}' -Encoding utf8
+}} else {{
+    '[]' | Out-File -FilePath '{tmpJsonFile}' -Encoding utf8
+}}
 ";
+        bool requiresRebootOverall = false;
 
-        return await AnsiConsole.Status()
+        await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync("Applying Windows Updates (This can take a long time)...", async ctx =>
+            .StartAsync("Initializing Windows Updates Scanner...", async ctx =>
             {
-                var (exitCode, output) = await _powerShell.ExecuteScriptAsync(script, hidden: true, onOutputLine: line => 
+                await _powerShell.ExecuteScriptAsync(initScript, hidden: true, onOutputLine: line => 
                 {
                     if (!string.IsNullOrWhiteSpace(line))
                     {
                         string safeLine = Markup.Escape(line);
-                        safeLine = safeLine.Length > 80 ? safeLine.Substring(0, 80) + "..." : safeLine;
-                        ctx.Status($"Applying Windows Updates: {safeLine}");
+                        safeLine = safeLine.Length > 120 ? safeLine.Substring(0, 120) + "..." : safeLine;
+                        AnsiConsole.MarkupLine($"[grey]{safeLine}[/]");
+                        ctx.Status($"Fetching Updates...");
                     }
                 });
-                
-                if (output.Contains("INSTALLCOUNT=0"))
-                {
-                    AnsiConsole.MarkupLine("[green]No new Windows Updates to install.[/]");
-                    return false; // Did not install any requiring reboot
-                }
-                
-                if (output.Contains("INSTALLCOUNT="))
-                {
-                    AnsiConsole.MarkupLine("[green]Windows Updates installed successfully![/]");
-                    return true; // Did install updates
-                }
-
-                AnsiConsole.MarkupLine("[yellow]Could not determine install count. See logs or raw output for details.[/]");
-                return true; 
             });
+
+        if (!_fs.FileExists(tmpJsonFile))
+        {
+            AnsiConsole.MarkupLine("[red]Failed to get updates list. JSON file not generated.[/]");
+            return false;
+        }
+
+        string json = _fs.ReadAllText(tmpJsonFile);
+        _fs.DeleteFile(tmpJsonFile);
+
+        var pendingUpdates = JsonSerializer.Deserialize<UpdateItem[]>(json) ?? Array.Empty<UpdateItem>();
+
+        if (pendingUpdates.Length == 0)
+        {
+            AnsiConsole.MarkupLine("[green]No new Windows Updates to install.[/]");
+            return false;
+        }
+
+        AnsiConsole.MarkupLine($"[yellow]Found {pendingUpdates.Length} pending updates.[/]");
+
+        foreach (var update in pendingUpdates)
+        {
+            string id = !string.IsNullOrEmpty(update.KB) ? update.KB : update.Title;
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            
+            if (_history.IsSkippedOrInstalled(id))
+            {
+                AnsiConsole.MarkupLine($"[grey]Skipping {Markup.Escape(id)} (Already Installed or Failed 3 Times)[/]");
+                continue;
+            }
+
+            int attempt = _history.GetAttempts(id) + 1;
+            AnsiConsole.MarkupLine($"[cyan]Installing {Markup.Escape(id)} (Attempt {attempt} of 3)...[/]");
+            _history.IncrementAttempt(id);
+
+            string param = !string.IsNullOrEmpty(update.KB) ? $"-KBArticleID '{update.KB}'" : $"-Title '{update.Title.Replace("'", "''")}'";
+            string installScript = $@"
+Import-Module PSWindowsUpdate
+Write-Output 'Starting installation of {update.Title.Replace("'", "''")}'
+$res = Install-WindowsUpdate {param} -AcceptAll -IgnoreReboot -Confirm:$false -NotUI
+if ($res.Result -match 'Installed' -or $res.Status -match 'Installed' -or $res.Installed -eq $true) {{
+    Write-Output 'INSTALL_SUCCESS'
+}} elseif ($res.Result -match 'RebootRequired' -or $res.Status -match 'RebootRequired') {{
+    Write-Output 'REBOOT_REQUIRED'
+}} else {{
+    Write-Output 'INSTALL_FAILED'
+}}
+";
+            bool success = false;
+            await AnsiConsole.Status().StartAsync($"Installing {Markup.Escape(id)}...", async ctx =>
+            {
+                var (exitCode, output) = await _powerShell.ExecuteScriptAsync(installScript, hidden: true, onOutputLine: line =>
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(line)}[/]");
+                    }
+                });
+
+                if (output.Contains("INSTALL_SUCCESS"))
+                {
+                    success = true;
+                    _history.MarkStatus(id, "Installed");
+                    AnsiConsole.MarkupLine($"[green]Successfully installed {Markup.Escape(id)}.[/]");
+                    requiresRebootOverall = true; 
+                }
+                else if (output.Contains("REBOOT_REQUIRED"))
+                {
+                    success = true;
+                    _history.MarkStatus(id, "Reboot_Required");
+                    AnsiConsole.MarkupLine($"[yellow]Installed {Markup.Escape(id)}. Reboot required![/]");
+                    requiresRebootOverall = true;
+                }
+                else
+                {
+                    AnsiConsole.MarkupLine($"[red]Failed to install {Markup.Escape(id)}.[/]");
+                }
+            });
+
+            if (attempt >= 3 && !success)
+            {
+                _history.MarkStatus(id, "Skipped_3_Strikes");
+                AnsiConsole.MarkupLine($"[red]Marked {Markup.Escape(id)} as Skipped (3 failures).[/]");
+            }
+        }
+
+        return requiresRebootOverall;
+    }
+
+    private class UpdateItem
+    {
+        public string Title { get; set; }
+        public string KB { get; set; }
     }
 }
