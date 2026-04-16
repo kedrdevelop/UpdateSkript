@@ -32,7 +32,13 @@ public interface IAppEnvironment
 
 public interface IPowerShellRunner
 {
-    Task<(int ExitCode, string Output)> ExecuteScriptAsync(string scriptContent, bool hidden = true);
+    Task<(int ExitCode, string Output)> ExecuteScriptAsync(string scriptContent, bool hidden = true, Action<string> onOutputLine = null);
+}
+
+public interface ILogger
+{
+    void LogInfo(string message);
+    void LogError(string message);
 }
 
 public interface IRegistryService

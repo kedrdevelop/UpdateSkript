@@ -39,3 +39,30 @@ public class RealAppEnvironment : IAppEnvironment
     public string BaseDirectory => AppDomain.CurrentDomain.BaseDirectory;
     public string TempDirectory => Path.GetTempPath();
 }
+
+public class AppLogger : ILogger
+{
+    private readonly string _logFile = @"C:\ServierDE_Deploy.log";
+    private readonly object _lock = new object();
+
+    public void LogInfo(string message) => WriteToFile($"[INFO ] [{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
+    public void LogError(string message) => WriteToFile($"[ERROR] [{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
+
+    private void WriteToFile(string line)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                using var fs = new FileStream(_logFile, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                using var sw = new StreamWriter(fs);
+                sw.WriteLine(line);
+                sw.Flush();
+            }
+            catch
+            {
+                // Ignore log failures to prevent crash
+            }
+        }
+    }
+}

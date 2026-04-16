@@ -18,6 +18,7 @@ class Program
         services.AddSingleton<IFileSystem, RealFileSystem>();
         services.AddSingleton<IRegistryWrapper, RealRegistryWrapper>();
         services.AddSingleton<IAppEnvironment, RealAppEnvironment>();
+        services.AddSingleton<ILogger, AppLogger>();
         services.AddTransient<IPowerShellRunner, PowerShellHost>();
 
         services.AddTransient<IRegistryService, RegistryService>();

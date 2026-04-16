@@ -23,7 +23,7 @@ public class WinUpdateProviderTests
     public async Task RunWindowsUpdatesAsync_ReturnsFalse_WhenNoUpdatesInstalled()
     {
         // Arrange
-        _mockPowerShell.Setup(p => p.ExecuteScriptAsync(It.IsAny<string>(), true))
+        _mockPowerShell.Setup(p => p.ExecuteScriptAsync(It.IsAny<string>(), true, It.IsAny<Action<string>>()))
             .ReturnsAsync((0, "Some logs... INSTALLCOUNT=0\nEnd of output"));
 
         // Act
@@ -37,7 +37,7 @@ public class WinUpdateProviderTests
     public async Task RunWindowsUpdatesAsync_ReturnsTrue_WhenUpdatesNeedReboot()
     {
         // Arrange
-        _mockPowerShell.Setup(p => p.ExecuteScriptAsync(It.IsAny<string>(), true))
+        _mockPowerShell.Setup(p => p.ExecuteScriptAsync(It.IsAny<string>(), true, It.IsAny<Action<string>>()))
             .ReturnsAsync((0, "INSTALLCOUNT=3"));
 
         // Act

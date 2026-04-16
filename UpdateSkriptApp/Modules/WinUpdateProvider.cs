@@ -52,7 +52,15 @@ Write-Output ""INSTALLCOUNT=$installedCount""
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Applying Windows Updates (This can take a long time)...", async ctx =>
             {
-                var (exitCode, output) = await _powerShell.ExecuteScriptAsync(script);
+                var (exitCode, output) = await _powerShell.ExecuteScriptAsync(script, hidden: true, onOutputLine: line => 
+                {
+                    if (!string.IsNullOrWhiteSpace(line))
+                    {
+                        string safeLine = Markup.Escape(line);
+                        safeLine = safeLine.Length > 80 ? safeLine.Substring(0, 80) + "..." : safeLine;
+                        ctx.Status($"Applying Windows Updates: {safeLine}");
+                    }
+                });
                 
                 if (output.Contains("INSTALLCOUNT=0"))
                 {
