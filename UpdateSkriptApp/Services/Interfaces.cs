@@ -10,6 +10,7 @@ public interface IFileSystem
     void DeleteFile(string path);
     void WriteAllText(string path, string content);
     string ReadAllText(string path);
+    string[] ReadAllLines(string path);
     bool DirectoryExists(string path);
     void CreateDirectory(string path);
     void DeleteDirectory(string path, bool recursive);

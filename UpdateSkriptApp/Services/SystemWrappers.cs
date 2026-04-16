@@ -10,6 +10,7 @@ public class RealFileSystem : IFileSystem
     public void DeleteFile(string path) => File.Delete(path);
     public void WriteAllText(string path, string content) => File.WriteAllText(path, content);
     public string ReadAllText(string path) => File.ReadAllText(path);
+    public string[] ReadAllLines(string path) => File.ReadAllLines(path);
     public bool DirectoryExists(string path) => Directory.Exists(path);
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
     public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);
