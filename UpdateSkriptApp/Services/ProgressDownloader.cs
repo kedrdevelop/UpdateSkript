@@ -31,6 +31,15 @@ public class ProgressDownloader : IProgressDownloader
                 var totalBytes = response.Content.Headers.ContentLength;
 
                 await AnsiConsole.Progress()
+                    .Columns(new ProgressColumn[] 
+                    { 
+                        new TaskDescriptionColumn(),    // Task description
+                        new ProgressBarColumn(),        // Progress bar
+                        new PercentageColumn(),         // Percentage
+                        new DownloadedColumn(),         // [Read] / [Total] (e.g. 10MB / 100MB)
+                        new RemainingTimeColumn(),      // Remaining time
+                        new SpinnerColumn(),            // Spinner
+                    })
                     .StartAsync(async ctx =>
                     {
                         var task = ctx.AddTask($"[cyan]{label}[/]");

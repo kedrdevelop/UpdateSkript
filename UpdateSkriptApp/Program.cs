@@ -55,12 +55,27 @@ class Program
         AnsiConsole.Write(new Rule("[yellow]Windows 11 Corporate Automation Tool[/]").Centered());
         AnsiConsole.WriteLine();
 
-        AnsiConsole.MarkupLine("[bold cyan]Type 'reinstall' to RESET everything, or press Enter to CONTINUE[/]");
-        string input = Console.ReadLine();
-        if (input != null && input.Trim().Equals("reinstall", StringComparison.OrdinalIgnoreCase))
+        AnsiConsole.MarkupLine("[bold cyan]CHOOSE AN OPTION OR PRESS ENTER TO CONTINUE:[/]");
+        AnsiConsole.MarkupLine(" [bold yellow]1[/] - Начать с начала (Reset all flags)");
+        AnsiConsole.MarkupLine(" [bold yellow]2[/] - Пропустить установку Windows (Skip WU)");
+        AnsiConsole.MarkupLine(" [bold yellow]3[/] - Пропустить установку Dell (Skip Dell)");
+        AnsiConsole.MarkupLine(" [grey]Press Enter to continue from last step...[/]");
+        
+        string input = Console.ReadLine()?.Trim();
+        if (input == "1" || input.Equals("reinstall", StringComparison.OrdinalIgnoreCase))
         {
             AnsiConsole.MarkupLine("[red]RESETTING ALL FLAGS: WU, Dell, and Win11...[/]");
             registrySvc.ResetAllFlags();
+        }
+        else if (input == "2")
+        {
+            AnsiConsole.MarkupLine("[yellow]SKIPPING Windows Updates: Marking as completed.[/]");
+            registrySvc.MarkPhaseCompleted("WU");
+        }
+        else if (input == "3")
+        {
+            AnsiConsole.MarkupLine("[yellow]SKIPPING Dell Driver Updates: Marking as completed.[/]");
+            registrySvc.MarkPhaseCompleted("Dell");
         }
 
         try
