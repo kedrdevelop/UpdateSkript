@@ -47,6 +47,10 @@ class Program
                 .Centered()
                 .Color(Color.Cyan1));
 
+        AnsiConsole.MarkupLine("[bold grey]developed by[/] [bold yellow]Viacheslav Kedrov[/]");
+        AnsiConsole.MarkupLine("[italic grey]Inspired by Reiner Goletz[/]");
+        AnsiConsole.WriteLine();
+
         AnsiConsole.Write(new Rule("[yellow]Windows 11 Corporate Automation Tool[/]").Centered());
         AnsiConsole.WriteLine();
 
