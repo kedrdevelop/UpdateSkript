@@ -22,26 +22,40 @@ public class WinUpdateProvider : IWinUpdateProvider
     public async Task<bool> RunWindowsUpdatesAsync()
     {
         string script = @"
-Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
-Install-Module -Name PSWindowsUpdate -Force -AllowClobber -SkipPublisherCheck -ErrorAction SilentlyContinue
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+Write-Output ""Enabling TLS 1.2 support...""
+
+Write-Output ""Preparing NuGet provider...""
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
+
+Write-Output ""Loading PSWindowsUpdate module...""
+Install-Module -Name PSWindowsUpdate -Force -AllowClobber -Confirm:$false -SkipPublisherCheck -ErrorAction SilentlyContinue
 Import-Module PSWindowsUpdate
 
+Write-Output ""Scanning for Windows updates (this may take a minute)...""
 $updates = Get-WindowsUpdate
+
+Write-Output ""Filtering results...""
 $filtered = $updates | Where-Object { $_.Title -notmatch 'Security Intelligence Update|Malicious Software Removal Tool|Antimalware Platform|Security platform' }
 
 $kbUpdates = @($filtered | Where-Object { $_.KB })
 $noKbUpdates = @($filtered | Where-Object { -not $_.KB })
 $installedCount = 0
 
+Write-Output ""Found $(@($updates).Count) total updates. $(@($filtered).Count) eligible for installation after filtering.""
+
 if ($kbUpdates) {
     $kbList = $kbUpdates | ForEach-Object { $_.KB }
-    $res = Install-WindowsUpdate -KBArticleID $kbList -AcceptAll -Install -AutoReboot:$false
+    Write-Output ""Installing $($kbList.Count) KB updates in batch...""
+    $res = Install-WindowsUpdate -KBArticleID $kbList -AcceptAll -Confirm:$false -Install -AutoReboot:$false
     $installedCount += @($res | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
 }
 
 if ($noKbUpdates) {
+    Write-Output ""Installing $($noKbUpdates.Count) non-KB updates...""
     foreach ($update in $noKbUpdates) {
-        $res2 = Install-WindowsUpdate -Title $update.Title -AcceptAll -Install -AutoReboot:$false
+        Write-Output ""Installing $($update.Title)...""
+        $res2 = Install-WindowsUpdate -Title $update.Title -AcceptAll -Confirm:$false -Install -AutoReboot:$false
         $installedCount += @($res2 | Where-Object { $_.Result -match 'Installed' -or $_.Status -match 'Installed' -or $_.Installed -eq $true }).Count
     }
 }

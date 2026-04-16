@@ -42,7 +42,7 @@ public class RealAppEnvironment : IAppEnvironment
 
 public class AppLogger : ILogger
 {
-    private readonly string _logFile = @"C:\ServierDE_Deploy.log";
+    private readonly string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ServierDE_Deploy.log");
     private readonly object _lock = new object();
 
     public void LogInfo(string message) => WriteToFile($"[INFO ] [{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}");
