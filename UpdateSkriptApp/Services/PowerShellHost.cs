@@ -5,12 +5,21 @@ using System.Threading.Tasks;
 
 namespace UpdateSkriptApp.Services;
 
-public static class PowerShellHost
+public class PowerShellHost : IPowerShellRunner
 {
-    public static async Task<(int ExitCode, string Output)> ExecuteScriptAsync(string scriptContent, bool hidden = true)
+    private readonly IFileSystem _fileSystem;
+    private readonly IAppEnvironment _env;
+
+    public PowerShellHost(IFileSystem fileSystem, IAppEnvironment env)
     {
-        string tmpFile = Path.Combine(Path.GetTempPath(), $"UpdateSkript_tmp_{Guid.NewGuid():N}.ps1");
-        File.WriteAllText(tmpFile, scriptContent);
+        _fileSystem = fileSystem;
+        _env = env;
+    }
+
+    public async Task<(int ExitCode, string Output)> ExecuteScriptAsync(string scriptContent, bool hidden = true)
+    {
+        string tmpFile = Path.Combine(_env.TempDirectory, $"UpdateSkript_tmp_{Guid.NewGuid():N}.ps1");
+        _fileSystem.WriteAllText(tmpFile, scriptContent);
 
         var startInfo = new ProcessStartInfo
         {
@@ -30,7 +39,7 @@ public static class PowerShellHost
 
         await Task.WhenAll(outputTask, errorTask, process.WaitForExitAsync());
 
-        File.Delete(tmpFile);
+        _fileSystem.DeleteFile(tmpFile);
 
         return (process.ExitCode, outputTask.Result + "\n" + errorTask.Result);
     }

@@ -1,49 +1,51 @@
 using System;
 using System.IO;
-using Microsoft.Win32;
 
 namespace UpdateSkriptApp.Services;
 
-public static class RegistryService
+public class RegistryService
 {
-    private static readonly string PublicDesktop = Environment.GetEnvironmentVariable("PUBLIC") 
-        ?? @"C:\Users\Public";
+    private readonly IFileSystem _fileSystem;
+    private readonly IAppEnvironment _env;
+    private readonly IRegistryWrapper _registry;
 
-    private static string GetFlagPath(string flagName) => Path.Combine(PublicDesktop, flagName);
-
-    public static bool IsPhaseCompleted(string phase)
+    public RegistryService(IFileSystem fileSystem, IAppEnvironment env, IRegistryWrapper registry)
     {
-        return File.Exists(GetFlagPath($"UpdateSkript_{phase}.flag"));
+        _fileSystem = fileSystem;
+        _env = env;
+        _registry = registry;
     }
 
-    public static void MarkPhaseCompleted(string phase)
+    private string PublicDesktop => _env.GetEnvironmentVariable("PUBLIC") ?? @"C:\Users\Public";
+
+    private string GetFlagPath(string flagName) => Path.Combine(PublicDesktop, flagName);
+
+    public bool IsPhaseCompleted(string phase)
+    {
+        return _fileSystem.FileExists(GetFlagPath($"UpdateSkript_{phase}.flag"));
+    }
+
+    public void MarkPhaseCompleted(string phase)
     {
         var path = GetFlagPath($"UpdateSkript_{phase}.flag");
-        File.WriteAllText(path, DateTime.Now.ToString("O"));
+        _fileSystem.WriteAllText(path, DateTime.Now.ToString("O"));
     }
 
-    public static void ResetAllFlags()
+    public void ResetAllFlags()
     {
         var flags = new[] { "WU", "Dell", "Win11" };
         foreach (var flag in flags)
         {
             var path = GetFlagPath($"UpdateSkript_{flag}.flag");
-            if (File.Exists(path))
+            if (_fileSystem.FileExists(path))
             {
-                File.Delete(path);
+                _fileSystem.DeleteFile(path);
             }
         }
     }
 
-    public static (int Build, string Version) GetCurrentOsVersion()
+    public (int Build, string Version) GetCurrentOsVersion()
     {
-        using var key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
-        if (key == null) return (0, "Unknown");
-
-        var buildStr = key.GetValue("CurrentBuild")?.ToString() ?? "0";
-        var displayVersion = key.GetValue("DisplayVersion")?.ToString() ?? "Unknown";
-
-        int.TryParse(buildStr, out int build);
-        return (build, displayVersion);
+        return _registry.GetCurrentOsVersion();
     }
 }
