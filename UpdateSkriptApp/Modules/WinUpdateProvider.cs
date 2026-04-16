@@ -46,8 +46,8 @@ Write-Output 'Scanning for Windows updates (this may take a minute)...'
 $updates = @(Get-WindowsUpdate)
 
 if ($updates.Count -gt 0) {{
-    $mapped = $updates | Select-Object Title, @{{Name='KB';Expression={{$_.KB}}}}
-    $mapped | ConvertTo-Json -Compress | Out-File -FilePath '{tmpJsonFile}' -Encoding utf8
+    [array]$mapped = $updates | Select-Object Title, @{{Name='KB';Expression={{$_.KB}}}}
+    ConvertTo-Json -InputObject $mapped -Compress | Out-File -FilePath '{tmpJsonFile}' -Encoding utf8
 }} else {{
     '[]' | Out-File -FilePath '{tmpJsonFile}' -Encoding utf8
 }}
@@ -76,10 +76,23 @@ if ($updates.Count -gt 0) {{
             return false;
         }
 
-        string json = _fs.ReadAllText(tmpJsonFile);
-        _fs.DeleteFile(tmpJsonFile);
-
-        var pendingUpdates = JsonSerializer.Deserialize<UpdateItem[]>(json) ?? Array.Empty<UpdateItem>();
+        string json = string.Empty;
+        UpdateItem[] pendingUpdates = Array.Empty<UpdateItem>();
+        try
+        {
+            json = _fs.ReadAllText(tmpJsonFile);
+            pendingUpdates = JsonSerializer.Deserialize<UpdateItem[]>(json) ?? Array.Empty<UpdateItem>();
+        }
+        catch (JsonException ex)
+        {
+            AnsiConsole.MarkupLine($"[red]Error parsing updates list. Raw JSON was: {Markup.Escape(json)}[/]");
+            AnsiConsole.WriteException(ex);
+        }
+        finally
+        {
+            if (_fs.FileExists(tmpJsonFile))
+                _fs.DeleteFile(tmpJsonFile);
+        }
 
         if (pendingUpdates.Length == 0)
         {
