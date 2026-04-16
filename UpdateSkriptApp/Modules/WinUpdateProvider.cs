@@ -5,9 +5,21 @@ using UpdateSkriptApp.Services;
 
 namespace UpdateSkriptApp.Modules;
 
-public static class WinUpdateProvider
+public interface IWinUpdateProvider
 {
-    public static async Task<bool> RunWindowsUpdatesAsync()
+    Task<bool> RunWindowsUpdatesAsync();
+}
+
+public class WinUpdateProvider : IWinUpdateProvider
+{
+    private readonly IPowerShellRunner _powerShell;
+
+    public WinUpdateProvider(IPowerShellRunner powerShell)
+    {
+        _powerShell = powerShell;
+    }
+
+    public async Task<bool> RunWindowsUpdatesAsync()
     {
         string script = @"
 Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction SilentlyContinue | Out-Null
@@ -40,7 +52,7 @@ Write-Output ""INSTALLCOUNT=$installedCount""
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Applying Windows Updates (This can take a long time)...", async ctx =>
             {
-                var (exitCode, output) = await PowerShellHost.ExecuteScriptAsync(script);
+                var (exitCode, output) = await _powerShell.ExecuteScriptAsync(script);
                 
                 if (output.Contains("INSTALLCOUNT=0"))
                 {

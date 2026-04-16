@@ -6,9 +6,16 @@ using Spectre.Console;
 
 namespace UpdateSkriptApp.Services;
 
-public static class ProgressDownloader
+public class ProgressDownloader : IProgressDownloader
 {
-    public static async Task<bool> DownloadFileAsync(string url, string destination, string label, int maxRetries = 3)
+    private readonly IFileSystem _fileSystem;
+
+    public ProgressDownloader(IFileSystem fileSystem)
+    {
+        _fileSystem = fileSystem;
+    }
+
+    public async Task<bool> DownloadFileAsync(string url, string destination, string label, int maxRetries = 3)
     {
         int attempt = 0;
         using var client = new HttpClient();
@@ -51,7 +58,7 @@ public static class ProgressDownloader
                         }
                     });
 
-                if (File.Exists(destination))
+                if (_fileSystem.FileExists(destination))
                 {
                     return true; // Success
                 }
@@ -59,7 +66,7 @@ public static class ProgressDownloader
             catch (Exception ex)
             {
                 AnsiConsole.MarkupLine($"[yellow]Download attempt {attempt} failed: {ex.Message}[/]");
-                if (File.Exists(destination)) File.Delete(destination);
+                if (_fileSystem.FileExists(destination)) _fileSystem.DeleteFile(destination);
                 await Task.Delay(3000); // Wait before retry
             }
         }

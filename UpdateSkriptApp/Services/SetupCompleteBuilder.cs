@@ -3,14 +3,21 @@ using System.IO;
 
 namespace UpdateSkriptApp.Services;
 
-public static class SetupCompleteBuilder
+public class SetupCompleteBuilder : ISetupCompleteBuilder
 {
-    public static void InjectSetupCompleteCmd()
+    private readonly IFileSystem _fileSystem;
+
+    public SetupCompleteBuilder(IFileSystem fileSystem)
+    {
+        _fileSystem = fileSystem;
+    }
+
+    public void InjectSetupCompleteCmd()
     {
         string scriptsDir = @"C:\Windows\Setup\Scripts";
-        if (!Directory.Exists(scriptsDir))
+        if (!_fileSystem.DirectoryExists(scriptsDir))
         {
-            Directory.CreateDirectory(scriptsDir);
+            _fileSystem.CreateDirectory(scriptsDir);
         }
 
         string cmdPath = Path.Combine(scriptsDir, "SetupComplete.cmd");
@@ -51,6 +58,6 @@ del /f /q ""%PUBLIC%\UpdateSkript_*.flag"" >> %LOG% 2>&1
 echo [%DATE% %TIME%] Triggering Sysprep... >> %LOG%
 %WINDIR%\system32\sysprep\sysprep.exe /oobe /generalize /shutdown >> %LOG% 2>&1
 ";
-        File.WriteAllText(cmdPath, content);
+        _fileSystem.WriteAllText(cmdPath, content);
     }
 }

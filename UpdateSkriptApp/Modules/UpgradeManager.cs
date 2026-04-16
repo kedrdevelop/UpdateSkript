@@ -7,11 +7,29 @@ using UpdateSkriptApp.Services;
 
 namespace UpdateSkriptApp.Modules;
 
-public static class UpgradeManager
+public interface IUpgradeManager
 {
-    public static async Task<bool> RunUpgradeAsync(string baseDir)
+    Task<bool> RunUpgradeAsync(string baseDir);
+}
+
+public class UpgradeManager : IUpgradeManager
+{
+    private readonly IPowerShellRunner _powerShell;
+    private readonly ISetupCompleteBuilder _setupBuilder;
+    private readonly ILogWatcher _logWatcher;
+    private readonly IFileSystem _fileSystem;
+
+    public UpgradeManager(IPowerShellRunner powerShell, ISetupCompleteBuilder setupBuilder, ILogWatcher logWatcher, IFileSystem fileSystem)
     {
-        var isoFile = Directory.GetFiles(baseDir, "*.iso")
+        _powerShell = powerShell;
+        _setupBuilder = setupBuilder;
+        _logWatcher = logWatcher;
+        _fileSystem = fileSystem;
+    }
+
+    public async Task<bool> RunUpgradeAsync(string baseDir)
+    {
+        var isoFile = _fileSystem.GetFiles(baseDir, "*.iso", SearchOption.TopDirectoryOnly)
             .OrderByDescending(f => File.GetLastWriteTime(f))
             .FirstOrDefault();
 
@@ -23,7 +41,7 @@ public static class UpgradeManager
 
         AnsiConsole.MarkupLine($"[cyan]Found ISO: {Path.GetFileName(isoFile)}[/]");
         
-        var (mountCode, mountOut) = await PowerShellHost.ExecuteScriptAsync($@"(Mount-DiskImage -ImagePath ""{isoFile}"" -PassThru | Get-Volume).DriveLetter");
+        var (mountCode, mountOut) = await _powerShell.ExecuteScriptAsync($@"(Mount-DiskImage -ImagePath ""{isoFile}"" -PassThru | Get-Volume).DriveLetter");
         
         string driveLetter = mountOut.Trim();
         if (string.IsNullOrEmpty(driveLetter) || driveLetter.Length > 1)
@@ -33,18 +51,18 @@ public static class UpgradeManager
         }
 
         string setupPath = $@"{driveLetter}:\setup.exe";
-        if (!File.Exists(setupPath))
+        if (!_fileSystem.FileExists(setupPath))
         {
             AnsiConsole.MarkupLine("[red]ERROR: setup.exe not found on mounted ISO.[/]");
-            await PowerShellHost.ExecuteScriptAsync($@"Dismount-DiskImage -ImagePath ""{isoFile}""");
+            await _powerShell.ExecuteScriptAsync($@"Dismount-DiskImage -ImagePath ""{isoFile}""");
             return false;
         }
 
         AnsiConsole.MarkupLine("[cyan]Configuring SetupComplete.cmd...[/]");
-        SetupCompleteBuilder.InjectSetupCompleteCmd();
+        _setupBuilder.InjectSetupCompleteCmd();
 
         string logPath = @"C:\$WINDOWS.~BT\Sources\Panther\setupact.log";
-        if (File.Exists(logPath)) File.Delete(logPath); // clear old log
+        if (_fileSystem.FileExists(logPath)) _fileSystem.DeleteFile(logPath);
 
         AnsiConsole.MarkupLine("[yellow]Starting Windows 11 Upgrade... DO NOT TURN OFF THE COMPUTER[/]");
         
@@ -60,11 +78,11 @@ public static class UpgradeManager
         };
         proc.Start();
 
-        await LogWatcher.MonitorSetupLogAsync(logPath, () => !proc.HasExited);
+        await _logWatcher.MonitorSetupLogAsync(logPath, () => !proc.HasExited);
         
-        bool success = LogWatcher.CheckIfUpgradeSucceeded(logPath);
+        bool success = _logWatcher.CheckIfUpgradeSucceeded(logPath);
         
-        await PowerShellHost.ExecuteScriptAsync($@"Dismount-DiskImage -ImagePath ""{isoFile}""");
+        await _powerShell.ExecuteScriptAsync($@"Dismount-DiskImage -ImagePath ""{isoFile}""");
 
         if (success || proc.ExitCode == 0 || proc.ExitCode == 3)
         {

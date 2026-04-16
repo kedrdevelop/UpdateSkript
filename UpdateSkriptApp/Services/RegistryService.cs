@@ -3,7 +3,7 @@ using System.IO;
 
 namespace UpdateSkriptApp.Services;
 
-public class RegistryService
+public class RegistryService : IRegistryService
 {
     private readonly IFileSystem _fileSystem;
     private readonly IAppEnvironment _env;

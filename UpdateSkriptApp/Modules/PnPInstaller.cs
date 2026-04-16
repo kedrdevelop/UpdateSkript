@@ -3,20 +3,35 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using Spectre.Console;
+using UpdateSkriptApp.Services;
 
 namespace UpdateSkriptApp.Modules;
 
-public static class PnPInstaller
+public interface IPnPInstaller
 {
-    public static async Task InstallDriversAsync(string driverExtractDir)
+    Task InstallDriversAsync(string driverExtractDir);
+}
+
+public class PnPInstaller : IPnPInstaller
+{
+    private readonly IFileSystem _fileSystem;
+    private readonly IPowerShellRunner _powerShell;
+
+    public PnPInstaller(IFileSystem fileSystem, IPowerShellRunner powerShell)
     {
-        if (!Directory.Exists(driverExtractDir))
+        _fileSystem = fileSystem;
+        _powerShell = powerShell;
+    }
+
+    public async Task InstallDriversAsync(string driverExtractDir)
+    {
+        if (!_fileSystem.DirectoryExists(driverExtractDir))
         {
             AnsiConsole.MarkupLine("[red]Driver extraction directory not found.[/]");
             return;
         }
 
-        var infFiles = Directory.GetFiles(driverExtractDir, "*.inf", SearchOption.AllDirectories);
+        var infFiles = _fileSystem.GetFiles(driverExtractDir, "*.inf", SearchOption.AllDirectories);
         int total = infFiles.Length;
         int installed = 0;
         int failed = 0;
@@ -34,21 +49,8 @@ public static class PnPInstaller
                     string driverName = Path.Combine(new DirectoryInfo(Path.GetDirectoryName(inf)).Name, Path.GetFileName(inf));
                     
                     task.Description = $"[green]Installing:[/] {driverName}";
-
-                    var startInfo = new ProcessStartInfo
-                    {
-                        FileName = "pnputil.exe",
-                        Arguments = $"/add-driver \"{inf}\" /install",
-                        UseShellExecute = false,
-                        RedirectStandardOutput = true,
-                        CreateNoWindow = true
-                    };
-
-                    using var process = new Process { StartInfo = startInfo };
-                    process.Start();
                     
-                    string output = await process.StandardOutput.ReadToEndAsync();
-                    await process.WaitForExitAsync();
+                    var (exit, output) = await _powerShell.ExecuteScriptAsync($"pnputil.exe /add-driver \"{inf}\" /install", hidden: true);
 
                     if (output.Contains("Published") || output.Contains("successfully"))
                     {

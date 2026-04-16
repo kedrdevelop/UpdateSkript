@@ -14,6 +14,8 @@ public interface IFileSystem
     void CreateDirectory(string path);
     void DeleteDirectory(string path, bool recursive);
     string[] GetFiles(string path, string searchPattern, SearchOption searchOption);
+    Stream OpenRead(string path);
+    long GetFileLength(string path);
 }
 
 public interface IRegistryWrapper
@@ -31,4 +33,28 @@ public interface IAppEnvironment
 public interface IPowerShellRunner
 {
     Task<(int ExitCode, string Output)> ExecuteScriptAsync(string scriptContent, bool hidden = true);
+}
+
+public interface IRegistryService
+{
+    bool IsPhaseCompleted(string phase);
+    void MarkPhaseCompleted(string phase);
+    void ResetAllFlags();
+    (int Build, string Version) GetCurrentOsVersion();
+}
+
+public interface ISetupCompleteBuilder
+{
+    void InjectSetupCompleteCmd();
+}
+
+public interface IProgressDownloader
+{
+    Task<bool> DownloadFileAsync(string url, string destination, string label, int maxRetries = 3);
+}
+
+public interface ILogWatcher
+{
+    Task MonitorSetupLogAsync(string logPath, Func<bool> isProcessActive);
+    bool CheckIfUpgradeSucceeded(string logPath);
 }

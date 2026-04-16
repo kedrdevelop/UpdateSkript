@@ -7,9 +7,16 @@ using Spectre.Console;
 
 namespace UpdateSkriptApp.Services;
 
-public static class LogWatcher
+public class LogWatcher : ILogWatcher
 {
-    public static async Task MonitorSetupLogAsync(string logPath, Func<bool> isProcessActive)
+    private readonly IFileSystem _fileSystem;
+
+    public LogWatcher(IFileSystem fileSystem)
+    {
+        _fileSystem = fileSystem;
+    }
+
+    public async Task MonitorSetupLogAsync(string logPath, Func<bool> isProcessActive)
     {
         long lastLogPos = 0;
         int lastPct = 1;
@@ -34,13 +41,13 @@ public static class LogWatcher
                 var task = ctx.AddTask("[green]Phase 3: Windows 11 Upgrade[/]", maxValue: 100);
                 task.Value = lastPct;
 
-                while (isProcessActive() || File.Exists(logPath))
+                while (isProcessActive() || _fileSystem.FileExists(logPath))
                 {
-                    if (File.Exists(logPath))
+                    if (_fileSystem.FileExists(logPath))
                     {
                         try
                         {
-                            using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                            using var fs = _fileSystem.OpenRead(logPath);
                             if (fs.Length > lastLogPos)
                             {
                                 fs.Seek(lastLogPos, SeekOrigin.Begin);
@@ -77,7 +84,7 @@ public static class LogWatcher
 
                     if (!isProcessActive() && task.Value >= 95)
                         break;
-                    if (!isProcessActive() && !File.Exists(logPath))
+                    if (!isProcessActive() && !_fileSystem.FileExists(logPath))
                         break; // Setup exited and log is gone or never created?
 
                     await Task.Delay(2000, cts.Token);
@@ -88,14 +95,13 @@ public static class LogWatcher
             });
     }
 
-    public static bool CheckIfUpgradeSucceeded(string logPath)
+    public bool CheckIfUpgradeSucceeded(string logPath)
     {
-        if (!File.Exists(logPath)) return false;
+        if (!_fileSystem.FileExists(logPath)) return false;
 
         try
         {
-            // Read tails
-            using var fs = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var fs = _fileSystem.OpenRead(logPath);
             if (fs.Length > 8192)
                 fs.Seek(-8192, SeekOrigin.End); // last ~8kb
             

@@ -14,6 +14,8 @@ public class RealFileSystem : IFileSystem
     public void CreateDirectory(string path) => Directory.CreateDirectory(path);
     public void DeleteDirectory(string path, bool recursive) => Directory.Delete(path, recursive);
     public string[] GetFiles(string path, string searchPattern, SearchOption searchOption) => Directory.GetFiles(path, searchPattern, searchOption);
+    public Stream OpenRead(string path) => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+    public long GetFileLength(string path) => new FileInfo(path).Length;
 }
 
 public class RealRegistryWrapper : IRegistryWrapper
