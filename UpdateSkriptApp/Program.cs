@@ -56,9 +56,9 @@ class Program
         AnsiConsole.WriteLine();
 
         AnsiConsole.MarkupLine("[bold cyan]CHOOSE AN OPTION OR PRESS ENTER TO CONTINUE:[/]");
-        AnsiConsole.MarkupLine(" [bold yellow]1[/] - Начать с начала (Reset all flags)");
-        AnsiConsole.MarkupLine(" [bold yellow]2[/] - Пропустить установку Windows (Skip WU)");
-        AnsiConsole.MarkupLine(" [bold yellow]3[/] - Пропустить установку Dell (Skip Dell)");
+        AnsiConsole.MarkupLine(" [bold yellow]1[/] - Reset all phases (Start from scratch)");
+        AnsiConsole.MarkupLine(" [bold yellow]2[/] - Skip Windows Updates (Mark as completed)");
+        AnsiConsole.MarkupLine(" [bold yellow]3[/] - Skip Dell Driver Updates (Mark as completed)");
         AnsiConsole.MarkupLine(" [grey]Press Enter to continue from last step...[/]");
         
         string input = Console.ReadLine()?.Trim();
